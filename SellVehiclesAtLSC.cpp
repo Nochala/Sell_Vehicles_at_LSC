@@ -40,6 +40,8 @@ static constexpr uint64_t kGetNumberOfThreadsRunningScriptHashNative =
     0x2C83A9DA6BFFC4F9ULL;
 static constexpr uint64_t kGetVehicleModelValueNative =
     0x5873C14A52D74236ULL;
+static constexpr uint64_t kIsWarningMessageActiveNative =
+    0xE18B138FABC53103ULL;
 
 struct ScriptProbe
 {
@@ -536,6 +538,7 @@ static int g_phase3FallbackPrice = 0;
 static bool g_phase3FallbackLogged = false;
 static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
+static bool g_phase3SellConfirmationActive = false;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -4093,6 +4096,13 @@ static int GetPhase3VehicleModelValue(Hash model)
         *result & 0xFFFFFFFFULL);
 }
 
+static bool IsPhase3SellConfirmationActive()
+{
+    nativeInit(kIsWarningMessageActiveNative);
+    uint64_t* result = nativeCall();
+    return result && (*result != 0);
+}
+
 static void UpdatePhase3SellPriceFallback()
 {
     if (!g_phase3Enabled
@@ -4102,6 +4112,7 @@ static void UpdatePhase3SellPriceFallback()
     {
         g_phase3SellContextActive = false;
         g_phase3SellContextPrice = 0;
+        g_phase3SellConfirmationActive = false;
 
         if (!g_carmodShopActive)
         {
@@ -4122,6 +4133,7 @@ static void UpdatePhase3SellPriceFallback()
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
+    g_phase3SellConfirmationActive = false;
 
     if (!g_phase3PriceThreadCached)
     {
@@ -4173,6 +4185,8 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3SellContextActive = true;
         g_phase3SellContextPrice =
             static_cast<int>(rockstarPrice);
+        g_phase3SellConfirmationActive =
+            IsPhase3SellConfirmationActive();
         return;
     }
 
@@ -4281,6 +4295,8 @@ static void UpdatePhase3SellPriceFallback()
 
     g_phase3SellContextActive = true;
     g_phase3SellContextPrice = fallbackPrice;
+    g_phase3SellConfirmationActive =
+        IsPhase3SellConfirmationActive();
 
     if (!g_phase3FallbackLogged)
     {
@@ -4303,6 +4319,7 @@ static void UpdateSellCompletionController(
         g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
+        g_phase3SellConfirmationActive,
         acceptPressed,
         cancelPressed);
 }
@@ -6078,6 +6095,7 @@ static void BeginCarmodShopSession()
     g_phase3FallbackLogged = false;
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
+    g_phase3SellConfirmationActive = false;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6111,6 +6129,7 @@ static void EndCarmodShopSession()
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
+    g_phase3SellConfirmationActive = false;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6291,7 +6310,8 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It adds only post-confirm cleanup/transition behavior and does not install synchronous native detours.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It now arms only after Rockstar's warning/confirmation screen has been observed on the existing 50 ms Sell poll, so opening Sell or opening the confirmation cannot start the transition.");
+    Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
 
