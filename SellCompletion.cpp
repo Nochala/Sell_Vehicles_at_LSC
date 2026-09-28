@@ -48,7 +48,6 @@ namespace
 
     static bool g_sellContextActive = false;
     static bool g_confirmationSeen = false;
-    static bool g_waitForConfirmationClear = false;
     static int g_lastSellPrice = 0;
 
     static Vehicle g_soldVehicle = 0;
@@ -121,7 +120,6 @@ namespace
     {
         g_sellContextActive = false;
         g_confirmationSeen = false;
-        g_waitForConfirmationClear = false;
         g_lastSellPrice = 0;
     }
 
@@ -383,9 +381,7 @@ namespace SellCompletion
         bool shopActive,
         bool sellContextActive,
         int sellPrice,
-        bool sellConfirmationActive,
-        bool acceptPressed,
-        bool cancelPressed)
+        int sellControlState)
     {
         const ULONGLONG now =
             GetTickCount64();
@@ -397,7 +393,8 @@ namespace SellCompletion
 
         if (!shopActive
             || !sellContextActive
-            || sellPrice <= 0)
+            || sellPrice <= 0
+            || sellControlState < 0)
         {
             ClearSellContext();
             return;
@@ -408,43 +405,49 @@ namespace SellCompletion
         if (!g_sellContextActive)
         {
             g_sellContextActive = true;
-            g_confirmationSeen = false;
-            g_waitForConfirmationClear = false;
+            g_confirmationSeen =
+                sellControlState == 1;
 
-            // Never arm from the same update that first establishes the Sell
-            // context. This prevents the Accept used to enter/open Sell from
-            // being mistaken for the final Rockstar confirmation.
+            if (g_confirmationSeen)
+            {
+                Log(
+                    "Rockstar sell confirmation state observed iControl=1 price=%d",
+                    sellPrice);
+            }
+
             return;
         }
 
-        if (g_waitForConfirmationClear)
+        // Rockstar's DO_STAGE_SELL state machine is:
+        //   0 = Sell row
+        //   1 = confirmation displayed
+        //   2 = confirmation accepted
+        //   3 = sale-complete state
+        //
+        // Never infer these states from raw Accept presses. We first require an
+        // observed state 1, then arm only after Rockstar advances to 2 or 3.
+        if (sellControlState == 0)
         {
-            if (!sellConfirmationActive)
-                g_waitForConfirmationClear = false;
-
-            return;
-        }
-
-        if (cancelPressed)
-        {
             g_confirmationSeen = false;
-            g_waitForConfirmationClear = true;
-            Log("sell confirmation cancelled/reset");
             return;
         }
 
-        // The transition may only be armed by an Accept that occurs after the
-        // Rockstar warning/confirmation screen was observed on an earlier
-        // update. If the confirmation becomes active on this same frame, record
-        // it for the next input but do not treat the current Accept as final.
-        const bool confirmationWasSeen =
-            g_confirmationSeen;
+        if (sellControlState == 1)
+        {
+            if (!g_confirmationSeen)
+            {
+                g_confirmationSeen = true;
+                Log(
+                    "Rockstar sell confirmation state observed iControl=1 price=%d",
+                    sellPrice);
+            }
 
-        if (sellConfirmationActive)
-            g_confirmationSeen = true;
+            return;
+        }
 
-        if (!acceptPressed
-            || !confirmationWasSeen)
+        if (!g_confirmationSeen
+            || (sellControlState != 2
+                && sellControlState != 3))
         {
             return;
         }
@@ -462,7 +465,8 @@ namespace SellCompletion
             now + kPostConfirmDelayMs;
 
         Log(
-            "Rockstar sell confirmation accepted; post-sale transition scheduled delayMs=%llu",
+            "Rockstar sell accepted iControl=%d; post-sale transition scheduled delayMs=%llu",
+            sellControlState,
             static_cast<unsigned long long>(
                 kPostConfirmDelayMs));
     }
