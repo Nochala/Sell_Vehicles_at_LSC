@@ -25,6 +25,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="SellCompletion.h" />
     <ClInclude Include="inc\enums.h" />
     <ClInclude Include="inc\keyboard.h" />
     <ClInclude Include="inc\main.h" />
