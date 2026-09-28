@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.6 Phase 3O native sell-state completion";
+static const char* kBuildTag = "v0.3.7 Phase 3O sell completion recovery";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -545,6 +545,7 @@ static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
 static Phase3SellControlPath g_phase3SellControlPath{};
 static int g_phase3SellControlState = -1;
+static int g_phase3LastLoggedSellControlState = -999;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -1697,6 +1698,7 @@ static void UpdatePhase2SellExposure()
             g_phase3SellPricePath = Phase3SellPricePath{};
             g_phase3SellControlPath = Phase3SellControlPath{};
             g_phase3SellControlState = -1;
+            g_phase3LastLoggedSellControlState = -999;
             g_phase3PriceThreadInfo = Phase2ThreadInfo{};
             g_phase3PriceThreadCached = false;
             g_nextPhase3PriceUpdateAt = 0;
@@ -4104,108 +4106,203 @@ static int GetPhase3VehicleModelValue(Hash model)
         *result & 0xFFFFFFFFULL);
 }
 
-static bool TryGetPhase3StaticIndex(
+static bool TryGetPhase3SwitchStaticIndex(
     Phase2ScrProgram* program,
-    uint32_t previousPosition,
-    uint32_t valuePosition,
+    const std::vector<uint32_t>& instructionPositions,
+    size_t switchInstructionIndex,
     uint32_t& staticIndex)
 {
     staticIndex = 0;
 
-    unsigned char* valueOp =
-        ScriptCodePointer(
-            program,
-            valuePosition);
-
-    if (!valueOp)
-        return false;
-
-    // Direct flattened static field load.
-    if (*valueOp == 0x50)
-    {
-        return ReadScriptUnsigned(
-            program,
-            valuePosition + 1,
-            2,
-            staticIndex);
-    }
-
-    if (*valueOp == 0x5F)
-    {
-        return ReadScriptUnsigned(
-            program,
-            valuePosition + 1,
-            3,
-            staticIndex);
-    }
-
-    if (previousPosition == 0)
-        return false;
-
-    unsigned char* baseOp =
-        ScriptCodePointer(
-            program,
-            previousPosition);
-
-    if (!baseOp
-        || (*baseOp != 0x4F
-            && *baseOp != 0x5E))
+    if (!program
+        || switchInstructionIndex == 0
+        || switchInstructionIndex
+            > instructionPositions.size())
     {
         return false;
     }
 
-    uint32_t baseIndex = 0;
-    if (!ReadScriptUnsigned(
-            program,
-            previousPosition + 1,
-            *baseOp == 0x4F ? 2U : 3U,
-            baseIndex))
-    {
-        return false;
-    }
+    const size_t firstIndex =
+        switchInstructionIndex > 8
+            ? switchInstructionIndex - 8
+            : 0;
 
-    // Some compiler builds keep the struct base and load a constant field
-    // offset instead of flattening the static index.
-    if (*valueOp == 0x41)
+    for (size_t i = switchInstructionIndex;
+         i-- > firstIndex;)
     {
-        uint32_t offset = 0;
-        if (!ReadScriptUnsigned(
+        const uint32_t position =
+            instructionPositions[i];
+
+        unsigned char* op =
+            ScriptCodePointer(
                 program,
-                valuePosition + 1,
-                1,
-                offset))
-        {
+                position);
+
+        if (!op)
             return false;
+
+        if (*op == 0x50
+            || *op == 0x5F)
+        {
+            if (!ReadScriptUnsigned(
+                    program,
+                    position + 1,
+                    *op == 0x50 ? 2U : 3U,
+                    staticIndex))
+            {
+                return false;
+            }
+
+            return true;
         }
 
-        staticIndex = baseIndex + offset;
-        return staticIndex >= baseIndex;
+        if (*op != 0x41
+            && *op != 0x47)
+        {
+            continue;
+        }
+
+        int64_t fieldOffset = 0;
+        if (*op == 0x41)
+        {
+            uint32_t rawOffset = 0;
+            if (!ReadScriptUnsigned(
+                    program,
+                    position + 1,
+                    1,
+                    rawOffset))
+            {
+                return false;
+            }
+
+            fieldOffset =
+                static_cast<int64_t>(
+                    rawOffset);
+        }
+        else
+        {
+            int16_t rawOffset = 0;
+            if (!ReadScriptSigned16(
+                    program,
+                    position + 1,
+                    rawOffset))
+            {
+                return false;
+            }
+
+            fieldOffset =
+                static_cast<int64_t>(
+                    rawOffset);
+        }
+
+        const size_t baseFirst =
+            i > 4 ? i - 4 : 0;
+
+        for (size_t baseIndex = i;
+             baseIndex-- > baseFirst;)
+        {
+            const uint32_t basePosition =
+                instructionPositions[baseIndex];
+
+            unsigned char* baseOp =
+                ScriptCodePointer(
+                    program,
+                    basePosition);
+
+            if (!baseOp)
+                return false;
+
+            if (*baseOp != 0x4F
+                && *baseOp != 0x5E)
+            {
+                continue;
+            }
+
+            uint32_t baseStatic = 0;
+            if (!ReadScriptUnsigned(
+                    program,
+                    basePosition + 1,
+                    *baseOp == 0x4F ? 2U : 3U,
+                    baseStatic))
+            {
+                return false;
+            }
+
+            const int64_t resolved =
+                static_cast<int64_t>(
+                    baseStatic)
+                + fieldOffset;
+
+            if (resolved < 0
+                || resolved > 0xFFFFFF)
+            {
+                return false;
+            }
+
+            staticIndex =
+                static_cast<uint32_t>(
+                    resolved);
+            return true;
+        }
     }
 
-    if (*valueOp == 0x47)
+    return false;
+}
+
+static bool Phase3RangeReferencesAnyString(
+    Phase2ScrProgram* program,
+    uint32_t start,
+    uint32_t end,
+    const std::vector<uint32_t>& stringOffsets)
+{
+    if (!program
+        || stringOffsets.empty()
+        || end <= start)
     {
-        int16_t offset = 0;
-        if (!ReadScriptSigned16(
+        return false;
+    }
+
+    for (uint32_t position = start;
+         position < end;)
+    {
+        uint32_t length = 0;
+        if (!GetVmInstructionLength(
                 program,
-                valuePosition + 1,
-                offset))
+                position,
+                length))
         {
             return false;
         }
 
-        const int64_t resolved =
-            static_cast<int64_t>(baseIndex)
-            + static_cast<int64_t>(offset);
-
-        if (resolved < 0
-            || resolved > 0xFFFFFF)
+        int pushedValue = -1;
+        if (TryGetVmPushedInt(
+                program,
+                position,
+                pushedValue)
+            && pushedValue >= 0)
         {
-            return false;
+            unsigned char* next =
+                ScriptCodePointer(
+                    program,
+                    position + length);
+
+            if (next && *next == kVmString)
+            {
+                const uint32_t value =
+                    static_cast<uint32_t>(
+                        pushedValue);
+
+                for (size_t i = 0;
+                     i < stringOffsets.size();
+                     ++i)
+                {
+                    if (stringOffsets[i] == value)
+                        return true;
+                }
+            }
         }
 
-        staticIndex =
-            static_cast<uint32_t>(resolved);
-        return true;
+        position += length;
     }
 
     return false;
@@ -4226,199 +4323,264 @@ static bool ResolvePhase3SellControlPath(
     }
 
     std::vector<uint32_t> confirmOffsets;
+    std::vector<uint32_t> soldOffsets;
+
     FindExactScriptStringOffsets(
         program,
         "CMOD_SEL_CONF",
         confirmOffsets);
+    FindExactScriptStringOffsets(
+        program,
+        "CMOD_SEL",
+        soldOffsets);
 
-    uint32_t confirmPush = 0;
-    for (uint32_t scan = sellHandler.start;
-         scan < sellHandler.end;)
+    if (confirmOffsets.empty()
+        || soldOffsets.empty())
     {
-        uint32_t length = 0;
-        unsigned char* op =
-            ScriptCodePointer(
-                program,
-                scan);
-
-        if (!op
-            || !GetVmInstructionLength(
-                program,
-                scan,
-                length))
-        {
-            break;
-        }
-
-        int pushedValue = -1;
-        if (TryGetVmPushedInt(
-                program,
-                scan,
-                pushedValue)
-            && pushedValue >= 0)
-        {
-            unsigned char* next =
-                ScriptCodePointer(
-                    program,
-                    scan + length);
-
-            if (next && *next == kVmString)
-            {
-                const uint32_t value =
-                    static_cast<uint32_t>(
-                        pushedValue);
-
-                for (size_t i = 0;
-                     i < confirmOffsets.size();
-                     ++i)
-                {
-                    if (confirmOffsets[i] == value)
-                    {
-                        confirmPush = scan;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (confirmPush != 0)
-            break;
-
-        scan += length;
+        Logf(
+            "[Phase3P] SellControl unresolved reason=missing Sell strings confirm=%u sold=%u",
+            static_cast<unsigned int>(
+                confirmOffsets.size()),
+            static_cast<unsigned int>(
+                soldOffsets.size()));
+        return false;
     }
 
-    uint32_t previousPreviousPosition = 0;
-    uint32_t previousPosition = 0;
-    uint32_t position = sellHandler.start;
-    uint32_t candidateIndex = 0;
-    uint32_t candidateSwitch = 0;
-    int candidateCount = 0;
-
-    while (position < sellHandler.end)
+    std::vector<uint32_t> instructionPositions;
+    for (uint32_t position = sellHandler.start;
+         position < sellHandler.end;)
     {
         uint32_t length = 0;
-        unsigned char* op =
-            ScriptCodePointer(
-                program,
-                position);
-
-        if (!op
-            || !GetVmInstructionLength(
+        if (!GetVmInstructionLength(
                 program,
                 position,
                 length))
         {
-            break;
+            Logf(
+                "[Phase3P] SellControl unresolved reason=parser-failed pc=0x%X",
+                position);
+            return false;
         }
 
-        if (*op == kVmSwitch
-            && previousPosition != 0
-            && (confirmPush == 0
-                || position < confirmPush))
+        instructionPositions.push_back(
+            position);
+        position += length;
+    }
+
+    uint32_t resolvedStaticIndex = 0;
+    uint32_t resolvedSwitch = 0;
+    int qualifiedCount = 0;
+
+    for (size_t instructionIndex = 0;
+         instructionIndex
+            < instructionPositions.size();
+         ++instructionIndex)
+    {
+        const uint32_t switchPosition =
+            instructionPositions[
+                instructionIndex];
+
+        unsigned char* op =
+            ScriptCodePointer(
+                program,
+                switchPosition);
+
+        if (!op || *op != kVmSwitch)
+            continue;
+
+        unsigned char* countPtr =
+            ScriptCodePointer(
+                program,
+                switchPosition + 1);
+
+        if (!countPtr
+            || static_cast<uint32_t>(
+                *countPtr) != 4U)
         {
-            unsigned char* countPtr =
-                ScriptCodePointer(
+            continue;
+        }
+
+        uint32_t caseTargets[4]{};
+        bool foundCases[4]{};
+
+        for (uint32_t entry = 0;
+             entry < 4;
+             ++entry)
+        {
+            const uint32_t entryPosition =
+                switchPosition + 2
+                + entry * 6;
+
+            uint32_t caseValue = 0;
+            uint32_t relative = 0;
+
+            if (!ReadScriptUnsigned(
                     program,
-                    position + 1);
-
-            const uint32_t caseCount =
-                countPtr
-                    ? static_cast<uint32_t>(*countPtr)
-                    : 0U;
-
-            if (caseCount == 4)
+                    entryPosition,
+                    4,
+                    caseValue)
+                || !ReadScriptUnsigned(
+                    program,
+                    entryPosition + 4,
+                    2,
+                    relative))
             {
-                bool hasCase0 = false;
-                bool hasCase1 = false;
-                bool hasCase2 = false;
-                bool hasCase3 = false;
+                continue;
+            }
 
-                for (uint32_t i = 0;
-                     i < caseCount;
-                     ++i)
+            if (caseValue > 3)
+                continue;
+
+            // The VM adds each SWITCH offset to the code pointer after GET_U16.
+            const uint64_t target64 =
+                static_cast<uint64_t>(
+                    entryPosition + 5)
+                + static_cast<uint64_t>(
+                    relative);
+
+            if (target64
+                    >= static_cast<uint64_t>(
+                        sellHandler.end)
+                || target64
+                    < static_cast<uint64_t>(
+                        sellHandler.start))
+            {
+                continue;
+            }
+
+            caseTargets[caseValue] =
+                static_cast<uint32_t>(
+                    target64);
+            foundCases[caseValue] = true;
+        }
+
+        if (!foundCases[0]
+            || !foundCases[1]
+            || !foundCases[2]
+            || !foundCases[3])
+        {
+            continue;
+        }
+
+        uint32_t orderedTargets[4] =
+        {
+            caseTargets[0],
+            caseTargets[1],
+            caseTargets[2],
+            caseTargets[3]
+        };
+
+        for (size_t i = 0; i < 4; ++i)
+        {
+            for (size_t j = i + 1;
+                 j < 4;
+                 ++j)
+            {
+                if (orderedTargets[j]
+                    < orderedTargets[i])
                 {
-                    uint32_t caseValue = 0;
-                    if (!ReadScriptUnsigned(
-                            program,
-                            position + 2
-                                + i * 6,
-                            4,
-                            caseValue))
-                    {
-                        caseValue = 0xFFFFFFFFU;
-                    }
-
-                    if (caseValue == 0U)
-                        hasCase0 = true;
-                    else if (caseValue == 1U)
-                        hasCase1 = true;
-                    else if (caseValue == 2U)
-                        hasCase2 = true;
-                    else if (caseValue == 3U)
-                        hasCase3 = true;
-                }
-
-                uint32_t staticIndex = 0;
-                if (hasCase0
-                    && hasCase1
-                    && hasCase2
-                    && hasCase3
-                    && TryGetPhase3StaticIndex(
-                        program,
-                        previousPreviousPosition,
-                        previousPosition,
-                        staticIndex))
-                {
-                    ++candidateCount;
-
-                    // The processing switch immediately preceding the
-                    // CMOD_SEL_CONF branch is the authoritative DO_STAGE_SELL
-                    // iControl switch. Prefer the closest qualified switch.
-                    if (candidateSwitch == 0
-                        || position > candidateSwitch)
-                    {
-                        candidateIndex = staticIndex;
-                        candidateSwitch = position;
-                    }
-
-                    Logf(
-                        "[Phase3P] SellControl candidate switch=0x%X staticIndex=%u confirmPush=0x%X",
-                        position,
-                        static_cast<unsigned int>(
-                            staticIndex),
-                        confirmPush);
+                    const uint32_t temp =
+                        orderedTargets[i];
+                    orderedTargets[i] =
+                        orderedTargets[j];
+                    orderedTargets[j] =
+                        temp;
                 }
             }
         }
 
-        previousPreviousPosition =
-            previousPosition;
-        previousPosition = position;
-        position += length;
+        auto blockEndForTarget =
+            [&](uint32_t target)
+            {
+                uint32_t end =
+                    sellHandler.end;
+
+                for (size_t i = 0;
+                     i < 4;
+                     ++i)
+                {
+                    if (orderedTargets[i] > target)
+                    {
+                        end =
+                            orderedTargets[i];
+                        break;
+                    }
+                }
+
+                return end;
+            };
+
+        const bool case0HasConfirm =
+            Phase3RangeReferencesAnyString(
+                program,
+                caseTargets[0],
+                blockEndForTarget(
+                    caseTargets[0]),
+                confirmOffsets);
+
+        const bool case2HasSold =
+            Phase3RangeReferencesAnyString(
+                program,
+                caseTargets[2],
+                blockEndForTarget(
+                    caseTargets[2]),
+                soldOffsets);
+
+        if (!case0HasConfirm
+            || !case2HasSold)
+        {
+            continue;
+        }
+
+        uint32_t staticIndex = 0;
+        if (!TryGetPhase3SwitchStaticIndex(
+                program,
+                instructionPositions,
+                instructionIndex,
+                staticIndex))
+        {
+            Logf(
+                "[Phase3P] SellControl candidate rejected switch=0x%X reason=input-static-unresolved",
+                switchPosition);
+            continue;
+        }
+
+        ++qualifiedCount;
+        resolvedStaticIndex =
+            staticIndex;
+        resolvedSwitch =
+            switchPosition;
+
+        Logf(
+            "[Phase3P] SellControl qualified switch=0x%X staticIndex=%u case0=0x%X case1=0x%X case2=0x%X case3=0x%X",
+            switchPosition,
+            static_cast<unsigned int>(
+                staticIndex),
+            caseTargets[0],
+            caseTargets[1],
+            caseTargets[2],
+            caseTargets[3]);
     }
 
-    if (candidateSwitch == 0)
+    if (qualifiedCount != 1)
     {
         Logf(
-            "[Phase3P] SellControl unresolved candidates=%d confirmPush=0x%X",
-            candidateCount,
-            confirmPush);
+            "[Phase3P] SellControl unresolved qualified=%d",
+            qualifiedCount);
         return false;
     }
 
     g_phase3SellControlPath.resolved = true;
     g_phase3SellControlPath.staticIndex =
-        candidateIndex;
+        resolvedStaticIndex;
     g_phase3SellControlPath.switchPosition =
-        candidateSwitch;
+        resolvedSwitch;
 
     Logf(
-        "[Phase3P] SellControl resolved staticIndex=%u switch=0x%X candidates=%d confirmPush=0x%X states=0:select,1:confirm,2:accepted,3:complete",
+        "[Phase3P] SellControl resolved staticIndex=%u switch=0x%X states=0:select,1:confirm,2:accepted,3:complete",
         static_cast<unsigned int>(
-            candidateIndex),
-        candidateSwitch,
-        candidateCount,
-        confirmPush);
+            resolvedStaticIndex),
+        resolvedSwitch);
 
     return true;
 }
@@ -4520,6 +4682,23 @@ static void UpdatePhase3SellPriceFallback()
 
     ReadPhase3SellControlState(
         g_phase3SellControlState);
+
+    if (g_phase3SellControlState
+            != g_phase3LastLoggedSellControlState)
+    {
+        Logf(
+            "[Phase3P] SellControl state=%d resolved=%s staticIndex=%u",
+            g_phase3SellControlState,
+            g_phase3SellControlPath.resolved
+                ? "yes"
+                : "no",
+            static_cast<unsigned int>(
+                g_phase3SellControlPath
+                    .staticIndex));
+
+        g_phase3LastLoggedSellControlState =
+            g_phase3SellControlState;
+    }
 
     const uint32_t index =
         g_phase3SellPricePath.element0StaticIndex;
@@ -4678,13 +4857,17 @@ static void UpdatePhase3SellPriceFallback()
     }
 }
 
-static void UpdateSellCompletionController()
+static void UpdateSellCompletionController(
+    bool acceptPressed,
+    bool cancelPressed)
 {
     SellCompletion::Update(
         g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
-        g_phase3SellControlState);
+        g_phase3SellControlState,
+        acceptPressed,
+        cancelPressed);
 }
 
 static void ResetPhase3NativeProbeState()
@@ -6462,6 +6645,7 @@ static void BeginCarmodShopSession()
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
     g_phase3SellControlState = -1;
+    g_phase3LastLoggedSellControlState = -999;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6496,6 +6680,7 @@ static void EndCarmodShopSession()
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
     g_phase3SellControlState = -1;
+    g_phase3LastLoggedSellControlState = -999;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6676,7 +6861,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It structurally resolves Rockstar's Sell iControl state once, samples that one cached slot on the existing 50 ms Sell poll, and only arms after the state advances from confirmation (1) to accepted/complete (2/3).");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.7 validates Rockstar's four-state Sell switch by its CMOD_SEL_CONF and CMOD_SEL case bodies, then uses a lightweight Accept/Cancel edge sequence only as a fallback if the structural state is unavailable.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
@@ -6737,18 +6922,19 @@ void ScriptMain()
         UpdatePhase3SellPriceFallback();
         LogManualMarker();
 
-        if (g_carmodShopActive
-            && g_logControls)
-        {
-            bool acceptPressed = false;
-            bool cancelPressed = false;
+        bool acceptPressed = false;
+        bool cancelPressed = false;
 
+        if (g_carmodShopActive)
+        {
             PollRelevantControls(
                 acceptPressed,
                 cancelPressed);
         }
 
-        UpdateSellCompletionController();
+        UpdateSellCompletionController(
+            acceptPressed,
+            cancelPressed);
 
         PollPeriodicSnapshot(now);
     }
