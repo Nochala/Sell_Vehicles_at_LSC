@@ -36,7 +36,7 @@ namespace
         { 118.6830f, 6618.4130f, 30.9185f, 0.450f, "Paleto Bay" }
     };
 
-    static constexpr ULONGLONG kPostConfirmDelayMs = 650ULL;
+    static constexpr ULONGLONG kPostConfirmDelayMs = 500ULL;
     static constexpr int kFadeOutMs = 350;
     static constexpr int kFadeInMs = 500;
     static constexpr ULONGLONG kFadeOutTimeoutMs = 1500ULL;
@@ -48,6 +48,7 @@ namespace
 
     static bool g_sellContextActive = false;
     static bool g_ignoreCurrentAccept = false;
+    static bool g_waitForAcceptRelease = false;
     static int g_acceptStage = 0;
     static int g_lastSellPrice = 0;
 
@@ -83,6 +84,14 @@ namespace
             || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 201)
             || CONTROLS::IS_CONTROL_JUST_PRESSED(2, 237)
             || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 237);
+    }
+
+    static bool IsAcceptPressed()
+    {
+        return CONTROLS::IS_CONTROL_PRESSED(2, 201)
+            || CONTROLS::IS_DISABLED_CONTROL_PRESSED(2, 201)
+            || CONTROLS::IS_CONTROL_PRESSED(2, 237)
+            || CONTROLS::IS_DISABLED_CONTROL_PRESSED(2, 237);
     }
 
     static bool WasCancelJustPressed()
@@ -137,6 +146,7 @@ namespace
     {
         g_sellContextActive = false;
         g_ignoreCurrentAccept = false;
+        g_waitForAcceptRelease = false;
         g_acceptStage = 0;
         g_lastSellPrice = 0;
     }
@@ -436,13 +446,23 @@ namespace SellCompletion
 
         const bool acceptPressed =
             WasAcceptJustPressed();
+        const bool acceptDown =
+            IsAcceptPressed();
         const bool cancelPressed =
             WasCancelJustPressed();
 
         if (g_ignoreCurrentAccept)
         {
-            if (!acceptPressed)
+            if (!acceptDown)
                 g_ignoreCurrentAccept = false;
+
+            return;
+        }
+
+        if (g_waitForAcceptRelease)
+        {
+            if (!acceptDown)
+                g_waitForAcceptRelease = false;
 
             return;
         }
@@ -457,16 +477,27 @@ namespace SellCompletion
         if (!acceptPressed)
             return;
 
+        g_waitForAcceptRelease = true;
+
         if (g_acceptStage == 0)
         {
             g_acceptStage = 1;
+            Log(
+                "sell flow advanced stage=1 price=%d",
+                sellPrice);
+            return;
+        }
+
+        if (g_acceptStage == 1)
+        {
+            g_acceptStage = 2;
             Log(
                 "sell confirmation opened price=%d",
                 sellPrice);
             return;
         }
 
-        if (g_acceptStage != 1)
+        if (g_acceptStage != 2)
             return;
 
         if (!CaptureSaleTarget())
@@ -475,7 +506,7 @@ namespace SellCompletion
             return;
         }
 
-        g_acceptStage = 2;
+        g_acceptStage = 3;
         g_state =
             CompletionState::WaitingForFade;
         g_stateStartedAt = now;
