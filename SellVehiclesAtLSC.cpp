@@ -447,8 +447,6 @@ static Vehicle g_phase3FallbackVehicle = 0;
 static Hash g_phase3FallbackModel = 0;
 static int g_phase3FallbackPrice = 0;
 static bool g_phase3FallbackLogged = false;
-static bool g_phase3SellContextActive = false;
-static int g_phase3SellContextPrice = 0;
 
 static bool IsEnhancedEdition()
 {
@@ -3994,9 +3992,6 @@ static int GetPhase3VehicleModelValue(Hash model)
 
 static void UpdatePhase3SellPriceFallback()
 {
-    g_phase3SellContextActive = false;
-    g_phase3SellContextPrice = 0;
-
     if (!g_phase3Enabled
         || !g_phase3SellPricePath.resolved
         || !g_carmodShopActive
@@ -4037,12 +4032,7 @@ static void UpdatePhase3SellPriceFallback()
             raw & 0xFFFFFFFFULL);
 
     if (rockstarPrice > 0)
-    {
-        g_phase3SellContextActive = true;
-        g_phase3SellContextPrice =
-            static_cast<int>(rockstarPrice);
         return;
-    }
 
     const Ped playerPed =
         PLAYER::PLAYER_PED_ID();
@@ -4150,9 +4140,6 @@ static void UpdatePhase3SellPriceFallback()
         return;
     }
 
-    g_phase3SellContextActive = true;
-    g_phase3SellContextPrice = fallbackPrice;
-
     if (!g_phase3FallbackLogged)
     {
         Logf(
@@ -4166,12 +4153,65 @@ static void UpdatePhase3SellPriceFallback()
     }
 }
 
+static bool ReadPhase3SellPriceForCompletion(
+    int& sellPrice)
+{
+    sellPrice = 0;
+
+    if (!g_phase3Enabled
+        || !g_phase3SellPricePath.resolved
+        || !g_carmodShopActive
+        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS())
+    {
+        return false;
+    }
+
+    Phase2ThreadInfo threadInfo{};
+    if (!GetPhase2ThreadInfo(
+            kCarmodShopHash,
+            threadInfo)
+        || !threadInfo.stack)
+    {
+        return false;
+    }
+
+    const uint32_t index =
+        g_phase3SellPricePath.element0StaticIndex;
+
+    if (index >= threadInfo.stackSize)
+        return false;
+
+    const unsigned char* slot =
+        reinterpret_cast<const unsigned char*>(
+            threadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    if (!IsReadableMemory(slot, sizeof(raw)))
+        return false;
+
+    std::memcpy(&raw, slot, sizeof(raw));
+
+    sellPrice =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    return sellPrice > 0;
+}
+
 static void UpdateSellCompletionController()
 {
+    int sellPrice = 0;
+
+    const bool sellContextActive =
+        ReadPhase3SellPriceForCompletion(
+            sellPrice);
+
     SellCompletion::Update(
         g_carmodShopActive,
-        g_phase3SellContextActive,
-        g_phase3SellContextPrice);
+        sellContextActive,
+        sellPrice);
 }
 
 static void ResetPhase3NativeProbeState()
@@ -5754,11 +5794,14 @@ static bool WasFrontendControlJustPressed(int control)
         || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, control);
 }
 
-static void LogPressedControl(
+static void LogControlIfPressed(
     int control,
     const char* name)
 {
     if (!g_logControls || !g_carmodShopActive)
+        return;
+
+    if (!WasFrontendControlJustPressed(control))
         return;
 
     const int depthBefore = g_inferredMenuDepth;
@@ -5801,81 +5844,16 @@ static void LogPressedControl(
 
 static void PollRelevantControls()
 {
-    if (!g_carmodShopActive)
-        return;
-
-    if (!g_logControls)
-    {
-        if (!SellCompletion::WantsInput())
-            return;
-
-        const bool acceptPressed =
-            WasFrontendControlJustPressed(201)
-            || WasFrontendControlJustPressed(237);
-
-        const bool cancelPressed =
-            WasFrontendControlJustPressed(202)
-            || WasFrontendControlJustPressed(238);
-
-        if (acceptPressed)
-            SellCompletion::OnAccept();
-
-        if (cancelPressed)
-            SellCompletion::OnCancel();
-
-        return;
-    }
-
-    const bool frontendDown =
-        WasFrontendControlJustPressed(187);
-    const bool frontendUp =
-        WasFrontendControlJustPressed(188);
-    const bool frontendLeft =
-        WasFrontendControlJustPressed(189);
-    const bool frontendRight =
-        WasFrontendControlJustPressed(190);
-    const bool frontendAccept =
-        WasFrontendControlJustPressed(201);
-    const bool frontendCancel =
-        WasFrontendControlJustPressed(202);
-    const bool cursorAccept =
-        WasFrontendControlJustPressed(237);
-    const bool cursorCancel =
-        WasFrontendControlJustPressed(238);
-    const bool frontendLb =
-        WasFrontendControlJustPressed(205);
-    const bool frontendRb =
-        WasFrontendControlJustPressed(206);
-
-    if (SellCompletion::WantsInput())
-    {
-        if (frontendAccept || cursorAccept)
-            SellCompletion::OnAccept();
-
-        if (frontendCancel || cursorCancel)
-            SellCompletion::OnCancel();
-    }
-
-    if (frontendDown)
-        LogPressedControl(187, "FRONTEND_DOWN");
-    if (frontendUp)
-        LogPressedControl(188, "FRONTEND_UP");
-    if (frontendLeft)
-        LogPressedControl(189, "FRONTEND_LEFT");
-    if (frontendRight)
-        LogPressedControl(190, "FRONTEND_RIGHT");
-    if (frontendAccept)
-        LogPressedControl(201, "FRONTEND_ACCEPT");
-    if (frontendCancel)
-        LogPressedControl(202, "FRONTEND_CANCEL");
-    if (cursorAccept)
-        LogPressedControl(237, "CURSOR_ACCEPT");
-    if (cursorCancel)
-        LogPressedControl(238, "CURSOR_CANCEL");
-    if (frontendLb)
-        LogPressedControl(205, "FRONTEND_LB");
-    if (frontendRb)
-        LogPressedControl(206, "FRONTEND_RB");
+    LogControlIfPressed(187, "FRONTEND_DOWN");
+    LogControlIfPressed(188, "FRONTEND_UP");
+    LogControlIfPressed(189, "FRONTEND_LEFT");
+    LogControlIfPressed(190, "FRONTEND_RIGHT");
+    LogControlIfPressed(201, "FRONTEND_ACCEPT");
+    LogControlIfPressed(202, "FRONTEND_CANCEL");
+    LogControlIfPressed(237, "CURSOR_ACCEPT");
+    LogControlIfPressed(238, "CURSOR_CANCEL");
+    LogControlIfPressed(205, "FRONTEND_LB");
+    LogControlIfPressed(206, "FRONTEND_RB");
 }
 
 static void LogManualMarker()
@@ -5961,8 +5939,6 @@ static void BeginCarmodShopSession()
     g_phase3FallbackModel = 0;
     g_phase3FallbackPrice = 0;
     g_phase3FallbackLogged = false;
-    g_phase3SellContextActive = false;
-    g_phase3SellContextPrice = 0;
 
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
