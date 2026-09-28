@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.4 Phase 3O post-sale transition";
+static const char* kBuildTag = "v0.3.5 Phase 3O LSC hot-path optimization";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -72,6 +72,7 @@ static uint32_t g_shopSessionId = 0;
 static ULONGLONG g_shopSessionStartedAt = 0;
 static ULONGLONG g_nextScriptPollAt = 0;
 static ULONGLONG g_nextSnapshotAt = 0;
+static ULONGLONG g_nextPhase2ProgramCheckAt = 0;
 static SHORT g_lastF10State = 0;
 static bool g_rootMarkerSet = false;
 static int g_inferredMenuDepth = -1;
@@ -535,6 +536,10 @@ static int g_phase3FallbackPrice = 0;
 static bool g_phase3FallbackLogged = false;
 static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
+static Phase2ThreadInfo g_phase3PriceThreadInfo{};
+static bool g_phase3PriceThreadCached = false;
+static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
+static constexpr ULONGLONG kPhase3PriceUpdateIntervalMs = 50ULL;
 
 static bool IsEnhancedEdition()
 {
@@ -1650,6 +1655,13 @@ static void UpdatePhase2SellExposure()
         return;
     }
 
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_nextPhase2ProgramCheckAt)
+        return;
+
+    g_nextPhase2ProgramCheckAt =
+        now + (g_phase2PatchApplied ? 1000ULL : 50ULL);
+
     Phase2ScrProgram* program = FindPhase2Program(kCarmodShopHash);
 
     if (program != g_phase2ObservedProgram)
@@ -1674,6 +1686,9 @@ static void UpdatePhase2SellExposure()
             g_phase3TraceUntil = 0;
             g_phase2NetworkGameNativeIndex = 0xFFFF;
             g_phase3SellPricePath = Phase3SellPricePath{};
+            g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+            g_phase3PriceThreadCached = false;
+            g_nextPhase3PriceUpdateAt = 0;
             g_phase3SellEligibilityFunction = VmFunctionRange{};
             g_phase3NoSell1MessagePush = 0;
             g_phase3PlayerOwnedHelper = VmFunctionRange{};
@@ -4080,41 +4095,72 @@ static int GetPhase3VehicleModelValue(Hash model)
 
 static void UpdatePhase3SellPriceFallback()
 {
-    g_phase3SellContextActive = false;
-    g_phase3SellContextPrice = 0;
-
     if (!g_phase3Enabled
         || !g_phase3SellPricePath.resolved
         || !g_carmodShopActive
         || NETWORK::NETWORK_IS_GAME_IN_PROGRESS())
     {
+        g_phase3SellContextActive = false;
+        g_phase3SellContextPrice = 0;
+
+        if (!g_carmodShopActive)
+        {
+            g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+            g_phase3PriceThreadCached = false;
+            g_nextPhase3PriceUpdateAt = 0;
+        }
+
         return;
     }
 
-    Phase2ThreadInfo threadInfo{};
-    if (!GetPhase2ThreadInfo(
-            kCarmodShopHash,
-            threadInfo)
-        || !threadInfo.stack)
-    {
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_nextPhase3PriceUpdateAt)
         return;
+
+    g_nextPhase3PriceUpdateAt =
+        now + kPhase3PriceUpdateIntervalMs;
+
+    g_phase3SellContextActive = false;
+    g_phase3SellContextPrice = 0;
+
+    if (!g_phase3PriceThreadCached)
+    {
+        Phase2ThreadInfo threadInfo{};
+        if (!GetPhase2ThreadInfo(
+                kCarmodShopHash,
+                threadInfo)
+            || !threadInfo.stack)
+        {
+            return;
+        }
+
+        g_phase3PriceThreadInfo = threadInfo;
+        g_phase3PriceThreadCached = true;
     }
 
     const uint32_t index =
         g_phase3SellPricePath.element0StaticIndex;
 
-    if (index >= threadInfo.stackSize)
+    if (index >= g_phase3PriceThreadInfo.stackSize)
+    {
+        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+        g_phase3PriceThreadCached = false;
         return;
+    }
 
     unsigned char* slot =
         reinterpret_cast<unsigned char*>(
-            threadInfo.stack)
+            g_phase3PriceThreadInfo.stack)
         + static_cast<size_t>(index)
             * sizeof(uintptr_t);
 
     uint64_t raw = 0;
     if (!IsReadableMemory(slot, sizeof(raw)))
+    {
+        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+        g_phase3PriceThreadCached = false;
         return;
+    }
 
     std::memcpy(&raw, slot, sizeof(raw));
 
@@ -4210,9 +4256,6 @@ static void UpdatePhase3SellPriceFallback()
         sizeof(patchedRaw));
 
     uint64_t verify = 0;
-    if (!IsReadableMemory(slot, sizeof(verify)))
-        return;
-
     std::memcpy(&verify, slot, sizeof(verify));
 
     const int32_t verifiedPrice =
@@ -5449,6 +5492,12 @@ static void UpdatePhase3Diagnostics()
         return;
     }
 
+    if (g_phase3AnalyzedProgram
+        && g_phase3AnalyzedProgram == g_phase2PatchedProgram)
+    {
+        return;
+    }
+
     Phase2ScrProgram* program = FindPhase2Program(kCarmodShopHash);
     if (!program || program != g_phase2PatchedProgram)
         return;
@@ -6029,6 +6078,9 @@ static void BeginCarmodShopSession()
     g_phase3FallbackLogged = false;
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
+    g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+    g_phase3PriceThreadCached = false;
+    g_nextPhase3PriceUpdateAt = 0;
 
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
@@ -6055,6 +6107,12 @@ static void EndCarmodShopSession()
         GAMEPLAY::GET_GAME_TIMER());
 
     LogVehicleSnapshot("carmod_shop stopped", true);
+
+    g_phase3SellContextActive = false;
+    g_phase3SellContextPrice = 0;
+    g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+    g_phase3PriceThreadCached = false;
+    g_nextPhase3PriceUpdateAt = 0;
 
     if (g_phase3Enabled && g_rootMarkerSet)
     {
@@ -6223,6 +6281,7 @@ static void LogStartupState()
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
+    Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, and Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame.");
     Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It adds only post-confirm cleanup/transition behavior and does not install synchronous native detours.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
