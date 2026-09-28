@@ -6256,7 +6256,9 @@ void ScriptMain()
 
         if (now >= g_nextLogFlushAt)
         {
-            FlushLogBuffer();
+            if (!g_carmodShopActive)
+                FlushLogBuffer();
+
             g_nextLogFlushAt =
                 now + kLogFlushIntervalMs;
         }
