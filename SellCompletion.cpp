@@ -42,13 +42,16 @@ namespace
     static constexpr ULONGLONG kFadeOutTimeoutMs = 1500ULL;
     static constexpr ULONGLONG kDetachTimeoutMs = 250ULL;
     static constexpr ULONGLONG kBlackHoldMs = 150ULL;
+    static constexpr ULONGLONG kAcceptDebounceMs = 120ULL;
 
     static SellCompletion::LogCallback g_logger = nullptr;
     static CompletionState g_state = CompletionState::Idle;
 
     static bool g_sellContextActive = false;
     static bool g_confirmationSeen = false;
+    static int g_acceptStage = 0;
     static int g_lastSellPrice = 0;
+    static ULONGLONG g_lastAcceptAt = 0;
 
     static Vehicle g_soldVehicle = 0;
     static Ped g_playerPed = 0;
@@ -120,7 +123,9 @@ namespace
     {
         g_sellContextActive = false;
         g_confirmationSeen = false;
+        g_acceptStage = 0;
         g_lastSellPrice = 0;
+        g_lastAcceptAt = 0;
     }
 
     static void ResetCompletionState()
@@ -258,6 +263,30 @@ namespace
             g_exitPoint.heading);
     }
 
+    static bool ArmPostSaleTransition(
+        ULONGLONG now,
+        const char* source,
+        int sellControlState)
+    {
+        if (!CaptureSaleTarget())
+            return false;
+
+        g_state =
+            CompletionState::WaitingForFade;
+        g_stateStartedAt = now;
+        g_actionAt =
+            now + kPostConfirmDelayMs;
+
+        Log(
+            "post-sale transition scheduled source=%s iControl=%d delayMs=%llu",
+            source ? source : "unknown",
+            sellControlState,
+            static_cast<unsigned long long>(
+                kPostConfirmDelayMs));
+
+        return true;
+    }
+
     static void UpdateCompletionState(
         ULONGLONG now)
     {
@@ -381,7 +410,9 @@ namespace SellCompletion
         bool shopActive,
         bool sellContextActive,
         int sellPrice,
-        int sellControlState)
+        int sellControlState,
+        bool acceptPressed,
+        bool cancelPressed)
     {
         const ULONGLONG now =
             GetTickCount64();
@@ -391,78 +422,149 @@ namespace SellCompletion
         if (g_state != CompletionState::Idle)
             return;
 
-        if (!shopActive
-            || sellControlState < 0)
+        if (!shopActive)
         {
             ClearSellContext();
             return;
         }
 
-        // Do not treat a generic browse-control value as Sell by itself.
-        // Establish the latch only when the structurally resolved Sell price
-        // context and Rockstar's confirmation state agree.
+        const bool pricedSellContext =
+            sellContextActive
+            && sellPrice > 0;
+
+        if (sellPrice > 0)
+            g_lastSellPrice = sellPrice;
+
         if (!g_sellContextActive)
         {
-            if (!sellContextActive
-                || sellPrice <= 0
-                || sellControlState != 1)
+            if (!pricedSellContext
+                && sellControlState != 1)
             {
                 return;
             }
 
             g_sellContextActive = true;
-            g_confirmationSeen = true;
-            g_lastSellPrice = sellPrice;
+            g_confirmationSeen =
+                sellControlState == 1;
 
-            Log(
-                "Rockstar sell confirmation state observed iControl=1 price=%d",
-                sellPrice);
+            if (g_confirmationSeen)
+            {
+                g_acceptStage = 2;
+                Log(
+                    "Rockstar sell confirmation state observed iControl=1 price=%d",
+                    g_lastSellPrice);
+            }
+            else if (acceptPressed)
+            {
+                // Count the input that established the Sell context. On the
+                // stock LSC flow this is normally the root-menu Sell select.
+                g_acceptStage = 1;
+                g_lastAcceptAt = now;
+            }
+
             return;
         }
 
-        // Once state 1 has positively identified this as the Sell confirmation,
-        // do not require the ITEM_COST field to remain populated. Rockstar can
-        // mutate menu/price state while advancing the sale to states 2 and 3.
-        if (sellPrice > 0)
-            g_lastSellPrice = sellPrice;
-
-        // Rockstar's DO_STAGE_SELL state machine is:
-        //   0 = Sell row / confirmation cancelled
-        //   1 = confirmation displayed
-        //   2 = confirmation accepted
-        //   3 = sale-complete state
-        if (sellControlState == 0)
+        if (!pricedSellContext
+            && !g_confirmationSeen
+            && sellControlState < 0)
         {
             ClearSellContext();
+            return;
+        }
+
+        if (cancelPressed)
+        {
+            if (g_confirmationSeen
+                || g_acceptStage >= 2)
+            {
+                // Backing out of "Are you sure?" returns to the Sell row.
+                g_confirmationSeen = false;
+                g_acceptStage = 1;
+            }
+            else
+            {
+                g_acceptStage = 0;
+            }
+
+            g_lastAcceptAt = 0;
             return;
         }
 
         if (sellControlState == 1)
+        {
+            const bool confirmationWasSeen =
+                g_confirmationSeen;
+
+            g_confirmationSeen = true;
+            if (g_acceptStage < 2)
+                g_acceptStage = 2;
+
+            // The Accept that first caused state 1 is the click that opened
+            // confirmation, not the final sale confirmation.
+            if (!confirmationWasSeen)
+            {
+                Log(
+                    "Rockstar sell confirmation state observed iControl=1 price=%d",
+                    g_lastSellPrice);
+                return;
+            }
+        }
+
+        if (g_confirmationSeen
+            && (sellControlState == 2
+                || sellControlState == 3))
+        {
+            if (!ArmPostSaleTransition(
+                    now,
+                    "rockstar-state",
+                    sellControlState))
+            {
+                ClearSellContext();
+            }
+
+            return;
+        }
+
+        if (!acceptPressed)
             return;
 
-        if (!g_confirmationSeen
-            || (sellControlState != 2
-                && sellControlState != 3))
+        if (g_lastAcceptAt != 0
+            && now - g_lastAcceptAt
+                < kAcceptDebounceMs)
         {
             return;
         }
 
-        if (!CaptureSaleTarget())
+        g_lastAcceptAt = now;
+
+        // Fallback for builds where the exact Sell iControl static cannot be
+        // resolved. This is the already-proven stock interaction sequence:
+        // root Sell select -> Sell Vehicle -> final Yes.
+        if (g_confirmationSeen
+            || g_acceptStage >= 2)
         {
-            ClearSellContext();
+            if (!ArmPostSaleTransition(
+                    now,
+                    "input-fallback",
+                    sellControlState))
+            {
+                ClearSellContext();
+            }
+
             return;
         }
 
-        g_state =
-            CompletionState::WaitingForFade;
-        g_stateStartedAt = now;
-        g_actionAt =
-            now + kPostConfirmDelayMs;
+        if (g_acceptStage == 0)
+        {
+            g_acceptStage = 1;
+            return;
+        }
 
-        Log(
-            "Rockstar sell accepted iControl=%d; post-sale transition scheduled delayMs=%llu",
-            sellControlState,
-            static_cast<unsigned long long>(
-                kPostConfirmDelayMs));
+        if (g_acceptStage == 1)
+        {
+            g_acceptStage = 2;
+            return;
+        }
     }
 }
