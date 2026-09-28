@@ -4028,17 +4028,35 @@ static void UpdatePhase3SellPriceFallback()
     if (rockstarPrice > 0)
         return;
 
-    const VehicleSnapshot snapshot =
-        CaptureVehicleSnapshot();
+    const Ped playerPed =
+        PLAYER::PLAYER_PED_ID();
 
-    if (!snapshot.valid)
-        return;
-
-    if (snapshot.vehicle != g_phase3FallbackVehicle
-        || snapshot.model != g_phase3FallbackModel)
+    if (!PED::IS_PED_IN_ANY_VEHICLE(
+            playerPed,
+            false))
     {
-        g_phase3FallbackVehicle = snapshot.vehicle;
-        g_phase3FallbackModel = snapshot.model;
+        return;
+    }
+
+    const Vehicle vehicle =
+        PED::GET_VEHICLE_PED_IS_IN(
+            playerPed,
+            false);
+
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        return;
+    }
+
+    const Hash model =
+        ENTITY::GET_ENTITY_MODEL(vehicle);
+
+    if (vehicle != g_phase3FallbackVehicle
+        || model != g_phase3FallbackModel)
+    {
+        g_phase3FallbackVehicle = vehicle;
+        g_phase3FallbackModel = model;
         g_phase3FallbackPrice = 0;
         g_phase3FallbackLogged = false;
     }
@@ -4049,7 +4067,7 @@ static void UpdatePhase3SellPriceFallback()
     {
         const int modelValue =
             GetPhase3VehicleModelValue(
-                snapshot.model);
+                model);
 
         if (modelValue <= 0)
         {
@@ -4057,8 +4075,8 @@ static void UpdatePhase3SellPriceFallback()
             {
                 Logf(
                     "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d modelValue=%d reason=model value unavailable",
-                    static_cast<int>(snapshot.vehicle),
-                    static_cast<unsigned int>(snapshot.model),
+                    static_cast<int>(vehicle),
+                    static_cast<unsigned int>(model),
                     static_cast<int>(rockstarPrice),
                     modelValue);
                 g_phase3FallbackLogged = true;
@@ -4120,8 +4138,8 @@ static void UpdatePhase3SellPriceFallback()
     {
         Logf(
             "[Phase3N] SellPriceFallback=yes vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d basis=GET_VEHICLE_MODEL_VALUE_60pct staticIndex=%u",
-            static_cast<int>(snapshot.vehicle),
-            static_cast<unsigned int>(snapshot.model),
+            static_cast<int>(vehicle),
+            static_cast<unsigned int>(model),
             static_cast<int>(rockstarPrice),
             fallbackPrice,
             static_cast<unsigned int>(index));
@@ -5684,8 +5702,8 @@ static void LogVehicleSnapshot(
             "[Vehicle] session=%u reason=%s handle=%d model=0x%08X class=%d modKit=%d entityHealth=%d engineHealth=%.2f bodyHealth=%.2f pos=(%.3f, %.3f, %.3f)",
             static_cast<unsigned int>(g_shopSessionId),
             reason ? reason : "unspecified",
-            static_cast<int>(snapshot.vehicle),
-            static_cast<unsigned int>(snapshot.model),
+            static_cast<int>(vehicle),
+            static_cast<unsigned int>(model),
             snapshot.vehicleClass,
             snapshot.modKit,
             snapshot.entityHealth,
