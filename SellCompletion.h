@@ -8,6 +8,8 @@ namespace SellCompletion
     void Update(
         bool shopActive,
         bool sellContextActive,
-        int sellPrice);
+        int sellPrice,
+        bool acceptPressed,
+        bool cancelPressed);
     void Reset();
 }
