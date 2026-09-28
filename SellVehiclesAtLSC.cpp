@@ -5758,15 +5758,18 @@ static bool WasFrontendControlJustPressed(int control)
         || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, control);
 }
 
-static void LogControlIfPressed(
+static bool LogControlIfPressed(
     int control,
     const char* name)
 {
-    if (!g_logControls || !g_carmodShopActive)
-        return;
+    if (!g_carmodShopActive)
+        return false;
 
     if (!WasFrontendControlJustPressed(control))
-        return;
+        return false;
+
+    if (!g_logControls)
+        return true;
 
     const int depthBefore = g_inferredMenuDepth;
 
@@ -5804,20 +5807,55 @@ static void LogControlIfPressed(
 
     // Phase 3K: do not arm runtime Sell tracing from menu accepts.
     // Menu input/depth diagnostics remain available without per-frame VM polling.
+    return true;
 }
 
-static void PollRelevantControls()
+static void PollRelevantControls(
+    bool& acceptPressed,
+    bool& cancelPressed)
 {
+    acceptPressed = false;
+    cancelPressed = false;
+
+    if (!g_carmodShopActive)
+        return;
+
+    if (!g_logControls)
+    {
+        acceptPressed =
+            WasFrontendControlJustPressed(201)
+            || WasFrontendControlJustPressed(237);
+
+        cancelPressed =
+            WasFrontendControlJustPressed(202)
+            || WasFrontendControlJustPressed(238);
+        return;
+    }
+
     LogControlIfPressed(187, "FRONTEND_DOWN");
     LogControlIfPressed(188, "FRONTEND_UP");
     LogControlIfPressed(189, "FRONTEND_LEFT");
     LogControlIfPressed(190, "FRONTEND_RIGHT");
-    LogControlIfPressed(201, "FRONTEND_ACCEPT");
-    LogControlIfPressed(202, "FRONTEND_CANCEL");
-    LogControlIfPressed(237, "CURSOR_ACCEPT");
-    LogControlIfPressed(238, "CURSOR_CANCEL");
+
+    const bool frontendAccept =
+        LogControlIfPressed(201, "FRONTEND_ACCEPT");
+    const bool frontendCancel =
+        LogControlIfPressed(202, "FRONTEND_CANCEL");
+    const bool cursorAccept =
+        LogControlIfPressed(237, "CURSOR_ACCEPT");
+    const bool cursorCancel =
+        LogControlIfPressed(238, "CURSOR_CANCEL");
+
     LogControlIfPressed(205, "FRONTEND_LB");
     LogControlIfPressed(206, "FRONTEND_RB");
+
+    acceptPressed =
+        frontendAccept
+        || cursorAccept;
+
+    cancelPressed =
+        frontendCancel
+        || cursorCancel;
 }
 
 static void LogManualMarker()
@@ -6134,7 +6172,6 @@ void ScriptMain()
         UpdatePhase2SellExposure();
         UpdatePhase3Diagnostics();
         UpdatePhase3SellPriceFallback();
-        UpdateSellCompletionController();
         LogManualMarker();
 
         if (now >= g_nextScriptPollAt)
@@ -6146,8 +6183,19 @@ void ScriptMain()
             PollScriptStates();
         }
 
+        bool acceptPressed = false;
+        bool cancelPressed = false;
+
         if (g_carmodShopActive)
-            PollRelevantControls();
+        {
+            PollRelevantControls(
+                acceptPressed,
+                cancelPressed);
+        }
+
+        UpdateSellCompletionController(
+            acceptPressed,
+            cancelPressed);
 
         PollPeriodicSnapshot(now);
     }
