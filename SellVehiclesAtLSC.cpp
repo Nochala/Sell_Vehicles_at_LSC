@@ -5754,14 +5754,11 @@ static bool WasFrontendControlJustPressed(int control)
         || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, control);
 }
 
-static void LogControlIfPressed(
+static void LogPressedControl(
     int control,
     const char* name)
 {
     if (!g_logControls || !g_carmodShopActive)
-        return;
-
-    if (!WasFrontendControlJustPressed(control))
         return;
 
     const int depthBefore = g_inferredMenuDepth;
@@ -5804,16 +5801,81 @@ static void LogControlIfPressed(
 
 static void PollRelevantControls()
 {
-    LogControlIfPressed(187, "FRONTEND_DOWN");
-    LogControlIfPressed(188, "FRONTEND_UP");
-    LogControlIfPressed(189, "FRONTEND_LEFT");
-    LogControlIfPressed(190, "FRONTEND_RIGHT");
-    LogControlIfPressed(201, "FRONTEND_ACCEPT");
-    LogControlIfPressed(202, "FRONTEND_CANCEL");
-    LogControlIfPressed(237, "CURSOR_ACCEPT");
-    LogControlIfPressed(238, "CURSOR_CANCEL");
-    LogControlIfPressed(205, "FRONTEND_LB");
-    LogControlIfPressed(206, "FRONTEND_RB");
+    if (!g_carmodShopActive)
+        return;
+
+    if (!g_logControls)
+    {
+        if (!SellCompletion::WantsInput())
+            return;
+
+        const bool acceptPressed =
+            WasFrontendControlJustPressed(201)
+            || WasFrontendControlJustPressed(237);
+
+        const bool cancelPressed =
+            WasFrontendControlJustPressed(202)
+            || WasFrontendControlJustPressed(238);
+
+        if (acceptPressed)
+            SellCompletion::OnAccept();
+
+        if (cancelPressed)
+            SellCompletion::OnCancel();
+
+        return;
+    }
+
+    const bool frontendDown =
+        WasFrontendControlJustPressed(187);
+    const bool frontendUp =
+        WasFrontendControlJustPressed(188);
+    const bool frontendLeft =
+        WasFrontendControlJustPressed(189);
+    const bool frontendRight =
+        WasFrontendControlJustPressed(190);
+    const bool frontendAccept =
+        WasFrontendControlJustPressed(201);
+    const bool frontendCancel =
+        WasFrontendControlJustPressed(202);
+    const bool cursorAccept =
+        WasFrontendControlJustPressed(237);
+    const bool cursorCancel =
+        WasFrontendControlJustPressed(238);
+    const bool frontendLb =
+        WasFrontendControlJustPressed(205);
+    const bool frontendRb =
+        WasFrontendControlJustPressed(206);
+
+    if (SellCompletion::WantsInput())
+    {
+        if (frontendAccept || cursorAccept)
+            SellCompletion::OnAccept();
+
+        if (frontendCancel || cursorCancel)
+            SellCompletion::OnCancel();
+    }
+
+    if (frontendDown)
+        LogPressedControl(187, "FRONTEND_DOWN");
+    if (frontendUp)
+        LogPressedControl(188, "FRONTEND_UP");
+    if (frontendLeft)
+        LogPressedControl(189, "FRONTEND_LEFT");
+    if (frontendRight)
+        LogPressedControl(190, "FRONTEND_RIGHT");
+    if (frontendAccept)
+        LogPressedControl(201, "FRONTEND_ACCEPT");
+    if (frontendCancel)
+        LogPressedControl(202, "FRONTEND_CANCEL");
+    if (cursorAccept)
+        LogPressedControl(237, "CURSOR_ACCEPT");
+    if (cursorCancel)
+        LogPressedControl(238, "CURSOR_CANCEL");
+    if (frontendLb)
+        LogPressedControl(205, "FRONTEND_LB");
+    if (frontendRb)
+        LogPressedControl(206, "FRONTEND_RB");
 }
 
 static void LogManualMarker()
