@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.7 Phase 3O sell completion recovery";
+static const char* kBuildTag = "v0.3.8 Phase 3O confirmed-sale delay";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -4626,7 +4626,9 @@ static bool ReadPhase3SellControlState(
         static_cast<int32_t>(
             raw & 0xFFFFFFFFULL);
 
-    if (value < 0 || value > 16)
+    // Rockstar's DO_STAGE_SELL iControl is strictly 0..3. Anything else
+    // means the structurally resolved slot is not trustworthy for completion.
+    if (value < 0 || value > 3)
         return false;
 
     state = static_cast<int>(value);
@@ -6861,7 +6863,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.7 validates Rockstar's four-state Sell switch by its CMOD_SEL_CONF and CMOD_SEL case bodies, then uses a lightweight Accept/Cancel edge sequence only as a fallback if the structural state is unavailable.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.8 treats the structurally resolved Rockstar iControl state as authoritative and only uses the lightweight input fallback when that state is unavailable. The transition is delayed about five seconds after the confirmed sale.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
