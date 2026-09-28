@@ -82,6 +82,8 @@ struct VehicleSnapshot
     bool valid;
 };
 
+static VehicleSnapshot CaptureVehicleSnapshot();
+
 static VehicleSnapshot g_lastVehicleSnapshot{};
 
 static int ReadIniInt(
