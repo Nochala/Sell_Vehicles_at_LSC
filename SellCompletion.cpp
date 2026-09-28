@@ -469,8 +469,17 @@ namespace SellCompletion
 
         if (cancelPressed)
         {
-            g_acceptStage = 0;
-            Log("sell confirmation cancelled/reset");
+            if (g_acceptStage >= 2)
+            {
+                g_acceptStage = 1;
+                Log("sell confirmation cancelled; returned to sell submenu");
+            }
+            else
+            {
+                g_acceptStage = 0;
+                Log("sell flow cancelled/reset");
+            }
+
             return;
         }
 
