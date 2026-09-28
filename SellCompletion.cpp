@@ -47,8 +47,8 @@ namespace
     static CompletionState g_state = CompletionState::Idle;
 
     static bool g_sellContextActive = false;
-    static bool g_ignoreCurrentAccept = false;
-    static int g_acceptStage = 0;
+    static bool g_confirmationSeen = false;
+    static bool g_waitForConfirmationClear = false;
     static int g_lastSellPrice = 0;
 
     static Vehicle g_soldVehicle = 0;
@@ -120,8 +120,8 @@ namespace
     static void ClearSellContext()
     {
         g_sellContextActive = false;
-        g_ignoreCurrentAccept = false;
-        g_acceptStage = 0;
+        g_confirmationSeen = false;
+        g_waitForConfirmationClear = false;
         g_lastSellPrice = 0;
     }
 
@@ -383,6 +383,7 @@ namespace SellCompletion
         bool shopActive,
         bool sellContextActive,
         int sellPrice,
+        bool sellConfirmationActive,
         bool acceptPressed,
         bool cancelPressed)
     {
@@ -398,11 +399,7 @@ namespace SellCompletion
             || !sellContextActive
             || sellPrice <= 0)
         {
-            if (!shopActive)
-                ClearSellContext();
-            else if (!sellContextActive)
-                ClearSellContext();
-
+            ClearSellContext();
             return;
         }
 
@@ -411,57 +408,53 @@ namespace SellCompletion
         if (!g_sellContextActive)
         {
             g_sellContextActive = true;
-            g_ignoreCurrentAccept = true;
-            g_acceptStage = 0;
+            g_confirmationSeen = false;
+            g_waitForConfirmationClear = false;
+
+            // Never arm from the same update that first establishes the Sell
+            // context. This prevents the Accept used to enter/open Sell from
+            // being mistaken for the final Rockstar confirmation.
             return;
         }
 
-        if (g_ignoreCurrentAccept)
+        if (g_waitForConfirmationClear)
         {
-            if (!acceptPressed)
-                g_ignoreCurrentAccept = false;
+            if (!sellConfirmationActive)
+                g_waitForConfirmationClear = false;
 
             return;
         }
 
         if (cancelPressed)
         {
-            g_acceptStage = 0;
+            g_confirmationSeen = false;
+            g_waitForConfirmationClear = true;
             Log("sell confirmation cancelled/reset");
             return;
         }
 
-        if (!acceptPressed)
-            return;
+        // The transition may only be armed by an Accept that occurs after the
+        // Rockstar warning/confirmation screen was observed on an earlier
+        // update. If the confirmation becomes active on this same frame, record
+        // it for the next input but do not treat the current Accept as final.
+        const bool confirmationWasSeen =
+            g_confirmationSeen;
 
-        if (g_acceptStage == 0)
+        if (sellConfirmationActive)
+            g_confirmationSeen = true;
+
+        if (!acceptPressed
+            || !confirmationWasSeen)
         {
-            g_acceptStage = 1;
-            Log(
-                "sell flow advanced stage=1 price=%d",
-                sellPrice);
             return;
         }
-
-        if (g_acceptStage == 1)
-        {
-            g_acceptStage = 2;
-            Log(
-                "sell confirmation opened price=%d",
-                sellPrice);
-            return;
-        }
-
-        if (g_acceptStage != 2)
-            return;
 
         if (!CaptureSaleTarget())
         {
-            g_acceptStage = 0;
+            g_confirmationSeen = false;
             return;
         }
 
-        g_acceptStage = 3;
         g_state =
             CompletionState::WaitingForFade;
         g_stateStartedAt = now;
@@ -469,7 +462,7 @@ namespace SellCompletion
             now + kPostConfirmDelayMs;
 
         Log(
-            "final sell confirm detected; post-sale transition scheduled delayMs=%llu",
+            "Rockstar sell confirmation accepted; post-sale transition scheduled delayMs=%llu",
             static_cast<unsigned long long>(
                 kPostConfirmDelayMs));
     }
