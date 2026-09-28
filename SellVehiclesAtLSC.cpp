@@ -17,10 +17,17 @@ static const char* kBuildTag = "v0.3.4 Phase 3O post-sale transition";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
-static bool g_logControls = true;
-static bool g_logVehicleSnapshots = true;
+static bool g_logControls = false;
+static bool g_logVehicleSnapshots = false;
 static int g_scriptPollIntervalMs = 250;
 static int g_snapshotIntervalMs = 1000;
+
+static constexpr size_t kLogBufferCapacity = 128 * 1024;
+static constexpr ULONGLONG kLogFlushIntervalMs = 1000ULL;
+static char g_logBuffer[kLogBufferCapacity]{};
+static size_t g_logBufferUsed = 0;
+static uint32_t g_logDroppedLines = 0;
+static ULONGLONG g_nextLogFlushAt = 0;
 
 static bool g_phase2Enabled = true;
 static bool g_phase3Enabled = true;
@@ -99,6 +106,11 @@ static int ReadIniInt(
 
 static void ResetLogFile()
 {
+    g_logBufferUsed = 0;
+    g_logDroppedLines = 0;
+    g_nextLogFlushAt =
+        GetTickCount64() + kLogFlushIntervalMs;
+
     if (!g_logEnabled)
         return;
 
@@ -107,34 +119,108 @@ static void ResetLogFile()
         fclose(file);
 }
 
+static void FlushLogBuffer()
+{
+    if (!g_logEnabled
+        || (g_logBufferUsed == 0
+            && g_logDroppedLines == 0))
+    {
+        return;
+    }
+
+    FILE* file =
+        _fsopen(g_logPath, "a", _SH_DENYNO);
+
+    if (!file)
+        return;
+
+    if (g_logBufferUsed > 0)
+    {
+        std::fwrite(
+            g_logBuffer,
+            1,
+            g_logBufferUsed,
+            file);
+    }
+
+    if (g_logDroppedLines > 0)
+    {
+        std::fprintf(
+            file,
+            "[logger] dropped %u buffered log lines\n",
+            static_cast<unsigned int>(
+                g_logDroppedLines));
+    }
+
+    std::fclose(file);
+
+    g_logBufferUsed = 0;
+    g_logDroppedLines = 0;
+}
+
 static void Logf(const char* format, ...)
 {
     if (!g_logEnabled || !format)
         return;
 
-    FILE* file = _fsopen(g_logPath, "a", _SH_DENYNO);
-    if (!file)
-        return;
+    char line[2048]{};
 
     SYSTEMTIME localTime{};
     GetLocalTime(&localTime);
 
-    std::fprintf(
-        file,
+    _snprintf_s(
+        line,
+        sizeof(line),
+        _TRUNCATE,
         "[%02u:%02u:%02u.%03u] ",
         static_cast<unsigned int>(localTime.wHour),
         static_cast<unsigned int>(localTime.wMinute),
         static_cast<unsigned int>(localTime.wSecond),
         static_cast<unsigned int>(localTime.wMilliseconds));
 
+    size_t lineLength =
+        strnlen_s(line, sizeof(line));
+
+    if (lineLength >= sizeof(line) - 1)
+    {
+        ++g_logDroppedLines;
+        return;
+    }
+
     va_list args;
     va_start(args, format);
-    std::vfprintf(file, format, args);
+    vsnprintf_s(
+        line + lineLength,
+        sizeof(line) - lineLength,
+        _TRUNCATE,
+        format,
+        args);
     va_end(args);
 
-    std::fputc('\n', file);
-    std::fflush(file);
-    std::fclose(file);
+    lineLength =
+        strnlen_s(line, sizeof(line));
+
+    if (lineLength < sizeof(line) - 1)
+    {
+        line[lineLength++] = '\n';
+        line[lineLength] = '\0';
+    }
+
+    if (lineLength == 0
+        || lineLength > kLogBufferCapacity
+        || g_logBufferUsed
+            > kLogBufferCapacity - lineLength)
+    {
+        ++g_logDroppedLines;
+        return;
+    }
+
+    std::memcpy(
+        g_logBuffer + g_logBufferUsed,
+        line,
+        lineLength);
+
+    g_logBufferUsed += lineLength;
 }
 
 static void LogSellCompletionMessage(const char* message)
@@ -6072,13 +6158,13 @@ static void LoadSettings()
             1) != 0;
 
     g_logControls =
-        ReadIniInt("Diagnostics", "LogControls", 1) != 0;
+        ReadIniInt("Diagnostics", "LogControls", 0) != 0;
 
     g_logVehicleSnapshots =
         ReadIniInt(
             "Diagnostics",
             "LogVehicleSnapshots",
-            1) != 0;
+            0) != 0;
 
     g_scriptPollIntervalMs =
         ReadIniInt(
@@ -6167,6 +6253,13 @@ void ScriptMain()
         WAIT(0);
 
         const ULONGLONG now = GetTickCount64();
+
+        if (now >= g_nextLogFlushAt)
+        {
+            FlushLogBuffer();
+            g_nextLogFlushAt =
+                now + kLogFlushIntervalMs;
+        }
 
         UpdateNetworkState();
         UpdatePhase2SellExposure();
