@@ -12,7 +12,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.2 Phase 3M Sell eligibility bypass";
+static const char* kBuildTag = "v0.3.3 Phase 3N Sell price fallback";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -30,6 +30,8 @@ static constexpr uint64_t kHasScriptWithNameHashLoadedNative =
     0x5F0F0C783EB16C04ULL;
 static constexpr uint64_t kGetNumberOfThreadsRunningScriptHashNative =
     0x2C83A9DA6BFFC4F9ULL;
+static constexpr uint64_t kGetVehicleModelValueNative =
+    0x5873C14A52D74236ULL;
 
 struct ScriptProbe
 {
@@ -433,6 +435,10 @@ struct Phase3SellPricePath
 };
 
 static Phase3SellPricePath g_phase3SellPricePath{};
+static Vehicle g_phase3FallbackVehicle = 0;
+static Hash g_phase3FallbackModel = 0;
+static int g_phase3FallbackPrice = 0;
+static bool g_phase3FallbackLogged = false;
 
 static bool IsEnhancedEdition()
 {
@@ -3961,6 +3967,166 @@ static void LogPhase3SellPriceState(
             raw & 0xFFFFFFFFULL));
 }
 
+static int GetPhase3VehicleModelValue(Hash model)
+{
+    nativeInit(kGetVehicleModelValueNative);
+    nativePush64(
+        static_cast<uint64_t>(
+            static_cast<uint32_t>(model)));
+
+    uint64_t* result = nativeCall();
+    if (!result)
+        return 0;
+
+    return static_cast<int32_t>(
+        *result & 0xFFFFFFFFULL);
+}
+
+static void UpdatePhase3SellPriceFallback()
+{
+    if (!g_phase3Enabled
+        || !g_phase3SellPricePath.resolved
+        || !g_carmodShopActive
+        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS())
+    {
+        return;
+    }
+
+    Phase2ThreadInfo threadInfo{};
+    if (!GetPhase2ThreadInfo(
+            kCarmodShopHash,
+            threadInfo)
+        || !threadInfo.stack)
+    {
+        return;
+    }
+
+    const uint32_t index =
+        g_phase3SellPricePath.element0StaticIndex;
+
+    if (index >= threadInfo.stackSize)
+        return;
+
+    unsigned char* slot =
+        reinterpret_cast<unsigned char*>(
+            threadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    if (!IsReadableMemory(slot, sizeof(raw)))
+        return;
+
+    std::memcpy(&raw, slot, sizeof(raw));
+
+    const int32_t rockstarPrice =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    if (rockstarPrice > 0)
+        return;
+
+    const VehicleSnapshot snapshot =
+        CaptureVehicleSnapshot();
+
+    if (!snapshot.valid)
+        return;
+
+    if (snapshot.vehicle != g_phase3FallbackVehicle
+        || snapshot.model != g_phase3FallbackModel)
+    {
+        g_phase3FallbackVehicle = snapshot.vehicle;
+        g_phase3FallbackModel = snapshot.model;
+        g_phase3FallbackPrice = 0;
+        g_phase3FallbackLogged = false;
+    }
+
+    int fallbackPrice = g_phase3FallbackPrice;
+
+    if (fallbackPrice <= 0)
+    {
+        const int modelValue =
+            GetPhase3VehicleModelValue(
+                snapshot.model);
+
+        if (modelValue <= 0)
+        {
+            if (!g_phase3FallbackLogged)
+            {
+                Logf(
+                    "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d modelValue=%d reason=model value unavailable",
+                    static_cast<int>(snapshot.vehicle),
+                    static_cast<unsigned int>(snapshot.model),
+                    static_cast<int>(rockstarPrice),
+                    modelValue);
+                g_phase3FallbackLogged = true;
+            }
+
+            return;
+        }
+
+        const int64_t scaled =
+            static_cast<int64_t>(modelValue) * 60LL;
+
+        fallbackPrice =
+            static_cast<int>(scaled / 100LL);
+
+        if (fallbackPrice <= 0)
+            fallbackPrice = modelValue;
+
+        g_phase3FallbackPrice = fallbackPrice;
+    }
+
+    const uint64_t patchedRaw =
+        (raw & 0xFFFFFFFF00000000ULL)
+        | static_cast<uint32_t>(
+            fallbackPrice);
+
+    std::memcpy(
+        slot,
+        &patchedRaw,
+        sizeof(patchedRaw));
+
+    uint64_t verify = 0;
+    if (!IsReadableMemory(slot, sizeof(verify)))
+        return;
+
+    std::memcpy(&verify, slot, sizeof(verify));
+
+    const int32_t verifiedPrice =
+        static_cast<int32_t>(
+            verify & 0xFFFFFFFFULL);
+
+    if (verifiedPrice != fallbackPrice)
+    {
+        if (!g_phase3FallbackLogged)
+        {
+            Logf(
+                "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d reason=write verification failed observed=%d",
+                static_cast<int>(snapshot.vehicle),
+                static_cast<unsigned int>(snapshot.model),
+                static_cast<int>(rockstarPrice),
+                fallbackPrice,
+                static_cast<int>(verifiedPrice));
+            g_phase3FallbackLogged = true;
+        }
+
+        return;
+    }
+
+    if (!g_phase3FallbackLogged)
+    {
+        Logf(
+            "[Phase3N] SellPriceFallback=yes vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d basis=GET_VEHICLE_MODEL_VALUE_60pct staticIndex=%u",
+            static_cast<int>(snapshot.vehicle),
+            static_cast<unsigned int>(snapshot.model),
+            static_cast<int>(rockstarPrice),
+            fallbackPrice,
+            static_cast<unsigned int>(index));
+        g_phase3FallbackLogged = true;
+    }
+}
+
 static void ResetPhase3NativeProbeState()
 {
     for (size_t i = 0; i < kPhase3NativeProbeCount; ++i)
@@ -5682,6 +5848,10 @@ static void BeginCarmodShopSession()
     g_inferredMenuDepth = -1;
     g_inputSequence = 0;
     g_phase3TraceUntil = 0;
+    g_phase3FallbackVehicle = 0;
+    g_phase3FallbackModel = 0;
+    g_phase3FallbackPrice = 0;
+    g_phase3FallbackLogged = false;
 
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
@@ -5874,8 +6044,9 @@ static void LogStartupState()
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3M keeps runtime Sell/native tracing disabled, resolves the parent Sell eligibility function through CMOD_NOSELL1, bypasses only the high-value rejection block, and forces Player_Vehicle ownership true only at Sell-related CALL sites. The ownership helper itself and NETWORK_IS_GAME_IN_PROGRESS remain untouched.");
-    Logf("[Info] Test workflow: enter Story Mode LSC, press F10 on the root menu, enter Rockstar's Sell menu, confirm one sale through the Vehicle Sold message, then exit LSC and send the log.");
+    Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
+    Logf("[Info] Confirmation/completion remains unpatched in Phase 3N-A. Existing one-time CMOD_SEL_CONF/CMOD_SEL/CMOD_SOLD structural diagnostics remain enabled; no synchronous/per-frame Sell native tracing or global network spoof is used.");
+    Logf("[Info] Test workflow: enter Story Mode LSC, press F10 on the root menu, open Sell with an Online-origin vehicle, verify the displayed price is nonzero, confirm once, then send the log and describe exactly where the flow stops.");
 }
 
 void ScriptMain()
@@ -5905,6 +6076,7 @@ void ScriptMain()
         UpdateNetworkState();
         UpdatePhase2SellExposure();
         UpdatePhase3Diagnostics();
+        UpdatePhase3SellPriceFallback();
         LogManualMarker();
 
         if (now >= g_nextScriptPollAt)
