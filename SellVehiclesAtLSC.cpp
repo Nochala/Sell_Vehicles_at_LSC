@@ -6336,6 +6336,11 @@ void ScriptMain()
             "~b~~h~SellVehiclesAtLSC~h~~w~ Phase 3O post-sale transition enabled.");
     }
 
+    // PERFORMANCE RULE:
+    // Keep the live LSC tick lightweight. Do not add full VM/thread scans,
+    // repeated structural discovery, synchronous file I/O, or other expensive
+    // work here. Cache stable results and make heavier work event-driven or
+    // rate-limited outside the per-frame path.
     while (true)
     {
         WAIT(0);
