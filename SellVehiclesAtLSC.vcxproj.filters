@@ -1,6 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="SellCompletion.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SellVehiclesAtLSC.cpp" />
   </ItemGroup>
@@ -10,6 +11,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="SellCompletion.h" />
     <ClInclude Include="inc\enums.h">
       <Filter>include</Filter>
     </ClInclude>
