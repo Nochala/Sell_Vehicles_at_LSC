@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <cstdio>
+#include <cstdarg>
 
 #include "script.h"
 #include "natives.h"
