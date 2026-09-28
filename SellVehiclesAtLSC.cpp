@@ -9,10 +9,11 @@
 
 #include "script.h"
 #include "natives.h"
+#include "SellCompletion.h"
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.3 Phase 3N Sell price fallback";
+static const char* kBuildTag = "v0.3.4 Phase 3O post-sale transition";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -134,6 +135,13 @@ static void Logf(const char* format, ...)
     std::fputc('\n', file);
     std::fflush(file);
     std::fclose(file);
+}
+
+static void LogSellCompletionMessage(const char* message)
+{
+    Logf(
+        "[SellCompletion] %s",
+        message ? message : "<null>");
 }
 
 static void Notify(const std::string& text)
@@ -4145,6 +4153,67 @@ static void UpdatePhase3SellPriceFallback()
     }
 }
 
+static bool ReadPhase3SellPriceForCompletion(
+    int& sellPrice)
+{
+    sellPrice = 0;
+
+    if (!g_phase3Enabled
+        || !g_phase3SellPricePath.resolved
+        || !g_carmodShopActive
+        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS())
+    {
+        return false;
+    }
+
+    Phase2ThreadInfo threadInfo{};
+    if (!GetPhase2ThreadInfo(
+            kCarmodShopHash,
+            threadInfo)
+        || !threadInfo.stack)
+    {
+        return false;
+    }
+
+    const uint32_t index =
+        g_phase3SellPricePath.element0StaticIndex;
+
+    if (index >= threadInfo.stackSize)
+        return false;
+
+    const unsigned char* slot =
+        reinterpret_cast<const unsigned char*>(
+            threadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    if (!IsReadableMemory(slot, sizeof(raw)))
+        return false;
+
+    std::memcpy(&raw, slot, sizeof(raw));
+
+    sellPrice =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    return sellPrice > 0;
+}
+
+static void UpdateSellCompletionController()
+{
+    int sellPrice = 0;
+
+    const bool sellContextActive =
+        ReadPhase3SellPriceForCompletion(
+            sellPrice);
+
+    SellCompletion::Update(
+        g_carmodShopActive,
+        sellContextActive,
+        sellPrice);
+}
+
 static void ResetPhase3NativeProbeState()
 {
     for (size_t i = 0; i < kPhase3NativeProbeCount; ++i)
@@ -6063,8 +6132,9 @@ static void LogStartupState()
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
-    Logf("[Info] Confirmation/completion remains unpatched in Phase 3N-A. Existing one-time CMOD_SEL_CONF/CMOD_SEL/CMOD_SOLD structural diagnostics remain enabled; no synchronous/per-frame Sell native tracing or global network spoof is used.");
-    Logf("[Info] Test workflow: enter Story Mode LSC, press F10 on the root menu, open Sell with an Online-origin vehicle, verify the displayed price is nonzero, confirm once, then send the log and describe exactly where the flow stops.");
+    Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It adds only post-confirm cleanup/transition behavior and does not install synchronous native detours.");
+    Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
 
 void ScriptMain()
@@ -6074,6 +6144,9 @@ void ScriptMain()
     if (g_logEnabled)
         ResetLogFile();
 
+    SellCompletion::Initialize(
+        &LogSellCompletionMessage);
+
     LogStartupState();
     InitializeScriptProbes();
     UpdateNetworkState();
@@ -6082,7 +6155,7 @@ void ScriptMain()
     if (g_showStartupNotification)
     {
         Notify(
-            "~b~~h~SellVehiclesAtLSC~h~~w~ Phase 3K runtime Sell tracing disabled. Test Rockstar's ~y~Sell~w~ flow once.");
+            "~b~~h~SellVehiclesAtLSC~h~~w~ Phase 3O post-sale transition enabled.");
     }
 
     while (true)
@@ -6095,6 +6168,7 @@ void ScriptMain()
         UpdatePhase2SellExposure();
         UpdatePhase3Diagnostics();
         UpdatePhase3SellPriceFallback();
+        UpdateSellCompletionController();
         LogManualMarker();
 
         if (now >= g_nextScriptPollAt)
