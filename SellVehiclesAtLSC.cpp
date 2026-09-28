@@ -82,8 +82,6 @@ struct VehicleSnapshot
     bool valid;
 };
 
-static VehicleSnapshot CaptureVehicleSnapshot();
-
 static VehicleSnapshot g_lastVehicleSnapshot{};
 
 static int ReadIniInt(
@@ -4123,8 +4121,8 @@ static void UpdatePhase3SellPriceFallback()
         {
             Logf(
                 "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d reason=write verification failed observed=%d",
-                static_cast<int>(snapshot.vehicle),
-                static_cast<unsigned int>(snapshot.model),
+                static_cast<int>(vehicle),
+                static_cast<unsigned int>(model),
                 static_cast<int>(rockstarPrice),
                 fallbackPrice,
                 static_cast<int>(verifiedPrice));
@@ -5702,8 +5700,8 @@ static void LogVehicleSnapshot(
             "[Vehicle] session=%u reason=%s handle=%d model=0x%08X class=%d modKit=%d entityHealth=%d engineHealth=%.2f bodyHealth=%.2f pos=(%.3f, %.3f, %.3f)",
             static_cast<unsigned int>(g_shopSessionId),
             reason ? reason : "unspecified",
-            static_cast<int>(vehicle),
-            static_cast<unsigned int>(model),
+            static_cast<int>(snapshot.vehicle),
+            static_cast<unsigned int>(snapshot.model),
             snapshot.vehicleClass,
             snapshot.modKit,
             snapshot.entityHealth,
