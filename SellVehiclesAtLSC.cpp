@@ -1771,7 +1771,7 @@ static void FindExactScriptStringOffsets(
 
 struct Phase3SellAnchor
 {
-    const char* label;
+    const char* label = nullptr;
     std::vector<uint32_t> offsets;
 };
 
