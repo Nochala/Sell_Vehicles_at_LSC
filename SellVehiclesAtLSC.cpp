@@ -1649,7 +1649,7 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
 static void UpdatePhase2SellExposure()
 {
     if (!g_phase2Enabled
-        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS()
+        || g_lastNetworkGame
         || !InitializePhase2Internals())
     {
         return;
@@ -4098,7 +4098,7 @@ static void UpdatePhase3SellPriceFallback()
     if (!g_phase3Enabled
         || !g_phase3SellPricePath.resolved
         || !g_carmodShopActive
-        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS())
+        || g_lastNetworkGame)
     {
         g_phase3SellContextActive = false;
         g_phase3SellContextPrice = 0;
@@ -5485,7 +5485,7 @@ static bool InstallPhase3SellGateProbes(
 static void UpdatePhase3Diagnostics()
 {
     if (!g_phase3Enabled
-        || NETWORK::NETWORK_IS_GAME_IN_PROGRESS()
+        || g_lastNetworkGame
         || !g_phase2PatchApplied
         || g_phase2NetworkGameNativeIndex == 0xFFFF)
     {
@@ -6081,6 +6081,7 @@ static void BeginCarmodShopSession()
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase2ProgramCheckAt = 0;
 
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
@@ -6113,6 +6114,7 @@ static void EndCarmodShopSession()
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase2ProgramCheckAt = 0;
 
     if (g_phase3Enabled && g_rootMarkerSet)
     {
@@ -6143,7 +6145,14 @@ static void PollScriptStates()
 {
     bool carmodShopNowActive = false;
 
-    for (size_t i = 0; i < kScriptProbeCount; ++i)
+    // carmod_shop is the only probe needed to maintain active-session state.
+    // Once it is running, do not keep querying the six unrelated diagnostic
+    // scripts every poll; that work is useful for discovery logs but not for
+    // the live Sell path.
+    const size_t probeCount =
+        g_carmodShopActive ? 1 : kScriptProbeCount;
+
+    for (size_t i = 0; i < probeCount; ++i)
     {
         ScriptProbe& probe = g_scriptProbes[i];
 
@@ -6281,7 +6290,7 @@ static void LogStartupState()
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
-    Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, and Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame.");
+    Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It adds only post-confirm cleanup/transition behavior and does not install synchronous native detours.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
@@ -6322,20 +6331,20 @@ void ScriptMain()
                 now + kLogFlushIntervalMs;
         }
 
-        UpdateNetworkState();
-        UpdatePhase2SellExposure();
-        UpdatePhase3Diagnostics();
-        UpdatePhase3SellPriceFallback();
-        LogManualMarker();
-
         if (now >= g_nextScriptPollAt)
         {
             g_nextScriptPollAt =
                 now + static_cast<ULONGLONG>(
                     g_scriptPollIntervalMs);
 
+            UpdateNetworkState();
             PollScriptStates();
         }
+
+        UpdatePhase2SellExposure();
+        UpdatePhase3Diagnostics();
+        UpdatePhase3SellPriceFallback();
+        LogManualMarker();
 
         bool acceptPressed = false;
         bool cancelPressed = false;
