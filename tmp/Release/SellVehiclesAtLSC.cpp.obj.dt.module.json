@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "tmp\\Release\\SellVehiclesAtLSC.obj",
+            "outputs": [
+                "tmp\\Release\\SellVehiclesAtLSC.cpp.obj.dt.module.json",
+                "tmp\\Release\\SellVehiclesAtLSC.cpp.obj.dt.d.json"
+            ],
+            "requires": []
+        }
+    ]
+}

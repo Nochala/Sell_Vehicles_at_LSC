@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="SellVehiclesAtLSC.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="include">
+      <UniqueIdentifier>{3bc26832-6fa0-4689-99e2-7b268a947ba0}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="inc\enums.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\keyboard.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\main.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\nativeCaller.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\natives.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\script.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="inc\types.h">
+      <Filter>include</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
