@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.5 Phase 3O LSC hot-path optimization";
+static const char* kBuildTag = "v0.3.6 Phase 3O native sell-state completion";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -40,8 +40,6 @@ static constexpr uint64_t kGetNumberOfThreadsRunningScriptHashNative =
     0x2C83A9DA6BFFC4F9ULL;
 static constexpr uint64_t kGetVehicleModelValueNative =
     0x5873C14A52D74236ULL;
-static constexpr uint64_t kIsWarningMessageActiveNative =
-    0xE18B138FABC53103ULL;
 
 struct ScriptProbe
 {
@@ -531,6 +529,13 @@ struct Phase3SellPricePath
     VmFunctionRange initializerFunction;
 };
 
+struct Phase3SellControlPath
+{
+    bool resolved;
+    uint32_t staticIndex;
+    uint32_t switchPosition;
+};
+
 static Phase3SellPricePath g_phase3SellPricePath{};
 static Vehicle g_phase3FallbackVehicle = 0;
 static Hash g_phase3FallbackModel = 0;
@@ -538,7 +543,8 @@ static int g_phase3FallbackPrice = 0;
 static bool g_phase3FallbackLogged = false;
 static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
-static bool g_phase3SellConfirmationActive = false;
+static Phase3SellControlPath g_phase3SellControlPath{};
+static int g_phase3SellControlState = -1;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -1689,6 +1695,8 @@ static void UpdatePhase2SellExposure()
             g_phase3TraceUntil = 0;
             g_phase2NetworkGameNativeIndex = 0xFFFF;
             g_phase3SellPricePath = Phase3SellPricePath{};
+            g_phase3SellControlPath = Phase3SellControlPath{};
+            g_phase3SellControlState = -1;
             g_phase3PriceThreadInfo = Phase2ThreadInfo{};
             g_phase3PriceThreadCached = false;
             g_nextPhase3PriceUpdateAt = 0;
@@ -4096,11 +4104,219 @@ static int GetPhase3VehicleModelValue(Hash model)
         *result & 0xFFFFFFFFULL);
 }
 
-static bool IsPhase3SellConfirmationActive()
+static bool TryGetPhase3StaticLoadIndex(
+    Phase2ScrProgram* program,
+    uint32_t position,
+    uint32_t& staticIndex)
 {
-    nativeInit(kIsWarningMessageActiveNative);
-    uint64_t* result = nativeCall();
-    return result && (*result != 0);
+    staticIndex = 0;
+
+    unsigned char* op = ScriptCodePointer(
+        program,
+        position);
+
+    if (!op)
+        return false;
+
+    if (*op == 0x50)
+    {
+        return ReadScriptUnsigned(
+            program,
+            position + 1,
+            2,
+            staticIndex);
+    }
+
+    if (*op == 0x5F)
+    {
+        return ReadScriptUnsigned(
+            program,
+            position + 1,
+            3,
+            staticIndex);
+    }
+
+    return false;
+}
+
+static bool ResolvePhase3SellControlPath(
+    Phase2ScrProgram* program,
+    const VmFunctionRange& sellHandler)
+{
+    g_phase3SellControlPath =
+        Phase3SellControlPath{};
+
+    if (!program
+        || !sellHandler.found
+        || sellHandler.end <= sellHandler.start)
+    {
+        return false;
+    }
+
+    uint32_t previousPosition = 0;
+    uint32_t position = sellHandler.start;
+    uint32_t candidateIndex = 0;
+    uint32_t candidateSwitch = 0;
+    int candidateCount = 0;
+
+    while (position < sellHandler.end)
+    {
+        uint32_t length = 0;
+        unsigned char* op =
+            ScriptCodePointer(
+                program,
+                position);
+
+        if (!op
+            || !GetVmInstructionLength(
+                program,
+                position,
+                length))
+        {
+            break;
+        }
+
+        if (*op == kVmSwitch
+            && previousPosition != 0)
+        {
+            unsigned char* countPtr =
+                ScriptCodePointer(
+                    program,
+                    position + 1);
+
+            const uint32_t caseCount =
+                countPtr
+                    ? static_cast<uint32_t>(*countPtr)
+                    : 0U;
+
+            if (caseCount == 4)
+            {
+                bool hasCase0 = false;
+                bool hasCase1 = false;
+                bool hasCase2 = false;
+                bool hasCase3 = false;
+
+                for (uint32_t i = 0;
+                     i < caseCount;
+                     ++i)
+                {
+                    uint32_t caseValue = 0;
+                    if (!ReadScriptUnsigned(
+                            program,
+                            position + 2
+                                + i * 6,
+                            4,
+                            caseValue))
+                    {
+                        caseValue = 0xFFFFFFFFU;
+                    }
+
+                    if (caseValue == 0U)
+                        hasCase0 = true;
+                    else if (caseValue == 1U)
+                        hasCase1 = true;
+                    else if (caseValue == 2U)
+                        hasCase2 = true;
+                    else if (caseValue == 3U)
+                        hasCase3 = true;
+                }
+
+                uint32_t staticIndex = 0;
+                if (hasCase0
+                    && hasCase1
+                    && hasCase2
+                    && hasCase3
+                    && TryGetPhase3StaticLoadIndex(
+                        program,
+                        previousPosition,
+                        staticIndex))
+                {
+                    ++candidateCount;
+                    candidateIndex = staticIndex;
+                    candidateSwitch = position;
+
+                    Logf(
+                        "[Phase3P] SellControl candidate switch=0x%X staticIndex=%u",
+                        position,
+                        static_cast<unsigned int>(
+                            staticIndex));
+                }
+            }
+        }
+
+        previousPosition = position;
+        position += length;
+    }
+
+    if (candidateCount != 1)
+    {
+        Logf(
+            "[Phase3P] SellControl unresolved candidates=%d",
+            candidateCount);
+        return false;
+    }
+
+    g_phase3SellControlPath.resolved = true;
+    g_phase3SellControlPath.staticIndex =
+        candidateIndex;
+    g_phase3SellControlPath.switchPosition =
+        candidateSwitch;
+
+    Logf(
+        "[Phase3P] SellControl resolved staticIndex=%u switch=0x%X states=0:select,1:confirm,2:accepted,3:complete",
+        static_cast<unsigned int>(
+            candidateIndex),
+        candidateSwitch);
+
+    return true;
+}
+
+static bool ReadPhase3SellControlState(
+    int& state)
+{
+    state = -1;
+
+    if (!g_phase3SellControlPath.resolved
+        || !g_phase3PriceThreadCached
+        || !g_phase3PriceThreadInfo.stack)
+    {
+        return false;
+    }
+
+    const uint32_t index =
+        g_phase3SellControlPath.staticIndex;
+
+    if (index >= g_phase3PriceThreadInfo.stackSize)
+        return false;
+
+    const unsigned char* slot =
+        reinterpret_cast<const unsigned char*>(
+            g_phase3PriceThreadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    if (!IsReadableMemory(
+            slot,
+            sizeof(raw)))
+    {
+        return false;
+    }
+
+    std::memcpy(
+        &raw,
+        slot,
+        sizeof(raw));
+
+    const int32_t value =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    if (value < 0 || value > 16)
+        return false;
+
+    state = static_cast<int>(value);
+    return true;
 }
 
 static void UpdatePhase3SellPriceFallback()
@@ -4112,7 +4328,7 @@ static void UpdatePhase3SellPriceFallback()
     {
         g_phase3SellContextActive = false;
         g_phase3SellContextPrice = 0;
-        g_phase3SellConfirmationActive = false;
+        g_phase3SellControlState = -1;
 
         if (!g_carmodShopActive)
         {
@@ -4133,7 +4349,7 @@ static void UpdatePhase3SellPriceFallback()
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
-    g_phase3SellConfirmationActive = false;
+    g_phase3SellControlState = -1;
 
     if (!g_phase3PriceThreadCached)
     {
@@ -4149,6 +4365,9 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3PriceThreadInfo = threadInfo;
         g_phase3PriceThreadCached = true;
     }
+
+    ReadPhase3SellControlState(
+        g_phase3SellControlState);
 
     const uint32_t index =
         g_phase3SellPricePath.element0StaticIndex;
@@ -4185,8 +4404,6 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3SellContextActive = true;
         g_phase3SellContextPrice =
             static_cast<int>(rockstarPrice);
-        g_phase3SellConfirmationActive =
-            IsPhase3SellConfirmationActive();
         return;
     }
 
@@ -4295,8 +4512,6 @@ static void UpdatePhase3SellPriceFallback()
 
     g_phase3SellContextActive = true;
     g_phase3SellContextPrice = fallbackPrice;
-    g_phase3SellConfirmationActive =
-        IsPhase3SellConfirmationActive();
 
     if (!g_phase3FallbackLogged)
     {
@@ -4311,17 +4526,13 @@ static void UpdatePhase3SellPriceFallback()
     }
 }
 
-static void UpdateSellCompletionController(
-    bool acceptPressed,
-    bool cancelPressed)
+static void UpdateSellCompletionController()
 {
     SellCompletion::Update(
         g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
-        g_phase3SellConfirmationActive,
-        acceptPressed,
-        cancelPressed);
+        g_phase3SellControlState);
 }
 
 static void ResetPhase3NativeProbeState()
@@ -5604,6 +5815,9 @@ static void UpdatePhase3Diagnostics()
         program,
         sellHandler,
         functions);
+    ResolvePhase3SellControlPath(
+        program,
+        sellHandler);
 
     // Phase 3K: do not install synchronous native detours in carmod_shop.
     // Even pass-through probes execute on Rockstar's hot Sell path and can
@@ -6095,7 +6309,7 @@ static void BeginCarmodShopSession()
     g_phase3FallbackLogged = false;
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
-    g_phase3SellConfirmationActive = false;
+    g_phase3SellControlState = -1;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6129,7 +6343,7 @@ static void EndCarmodShopSession()
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
-    g_phase3SellConfirmationActive = false;
+    g_phase3SellControlState = -1;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6310,7 +6524,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It now arms only after Rockstar's warning/confirmation screen has been observed on the existing 50 ms Sell poll, so opening Sell or opening the confirmation cannot start the transition.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. It structurally resolves Rockstar's Sell iControl state once, samples that one cached slot on the existing 50 ms Sell poll, and only arms after the state advances from confirmation (1) to accepted/complete (2/3).");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
@@ -6371,19 +6585,18 @@ void ScriptMain()
         UpdatePhase3SellPriceFallback();
         LogManualMarker();
 
-        bool acceptPressed = false;
-        bool cancelPressed = false;
-
-        if (g_carmodShopActive)
+        if (g_carmodShopActive
+            && g_logControls)
         {
+            bool acceptPressed = false;
+            bool cancelPressed = false;
+
             PollRelevantControls(
                 acceptPressed,
                 cancelPressed);
         }
 
-        UpdateSellCompletionController(
-            acceptPressed,
-            cancelPressed);
+        UpdateSellCompletionController();
 
         PollPeriodicSnapshot(now);
     }
