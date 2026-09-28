@@ -314,7 +314,7 @@ namespace
                     g_soldVehicle,
                     false))
             {
-                TASK::TASK_LEAVE_VEHICLE(
+                AI::TASK_LEAVE_VEHICLE(
                     g_playerPed,
                     g_soldVehicle,
                     16);
