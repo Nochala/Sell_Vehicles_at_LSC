@@ -392,58 +392,53 @@ namespace SellCompletion
             return;
 
         if (!shopActive
-            || !sellContextActive
-            || sellPrice <= 0
             || sellControlState < 0)
         {
             ClearSellContext();
             return;
         }
 
-        g_lastSellPrice = sellPrice;
-
+        // Do not treat a generic browse-control value as Sell by itself.
+        // Establish the latch only when the structurally resolved Sell price
+        // context and Rockstar's confirmation state agree.
         if (!g_sellContextActive)
         {
-            g_sellContextActive = true;
-            g_confirmationSeen =
-                sellControlState == 1;
-
-            if (g_confirmationSeen)
+            if (!sellContextActive
+                || sellPrice <= 0
+                || sellControlState != 1)
             {
-                Log(
-                    "Rockstar sell confirmation state observed iControl=1 price=%d",
-                    sellPrice);
+                return;
             }
 
+            g_sellContextActive = true;
+            g_confirmationSeen = true;
+            g_lastSellPrice = sellPrice;
+
+            Log(
+                "Rockstar sell confirmation state observed iControl=1 price=%d",
+                sellPrice);
             return;
         }
 
+        // Once state 1 has positively identified this as the Sell confirmation,
+        // do not require the ITEM_COST field to remain populated. Rockstar can
+        // mutate menu/price state while advancing the sale to states 2 and 3.
+        if (sellPrice > 0)
+            g_lastSellPrice = sellPrice;
+
         // Rockstar's DO_STAGE_SELL state machine is:
-        //   0 = Sell row
+        //   0 = Sell row / confirmation cancelled
         //   1 = confirmation displayed
         //   2 = confirmation accepted
         //   3 = sale-complete state
-        //
-        // Never infer these states from raw Accept presses. We first require an
-        // observed state 1, then arm only after Rockstar advances to 2 or 3.
         if (sellControlState == 0)
         {
-            g_confirmationSeen = false;
+            ClearSellContext();
             return;
         }
 
         if (sellControlState == 1)
-        {
-            if (!g_confirmationSeen)
-            {
-                g_confirmationSeen = true;
-                Log(
-                    "Rockstar sell confirmation state observed iControl=1 price=%d",
-                    sellPrice);
-            }
-
             return;
-        }
 
         if (!g_confirmationSeen
             || (sellControlState != 2
@@ -454,7 +449,7 @@ namespace SellCompletion
 
         if (!CaptureSaleTarget())
         {
-            g_confirmationSeen = false;
+            ClearSellContext();
             return;
         }
 
