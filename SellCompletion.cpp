@@ -413,10 +413,6 @@ namespace SellCompletion
             g_sellContextActive = true;
             g_ignoreCurrentAccept = true;
             g_acceptStage = 0;
-
-            Log(
-                "sell context entered price=%d",
-                sellPrice);
             return;
         }
 
