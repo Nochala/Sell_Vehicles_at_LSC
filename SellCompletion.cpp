@@ -77,22 +77,6 @@ namespace
         g_logger(buffer);
     }
 
-    static bool WasAcceptJustPressed()
-    {
-        return CONTROLS::IS_CONTROL_JUST_PRESSED(2, 201)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 201)
-            || CONTROLS::IS_CONTROL_JUST_PRESSED(2, 237)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 237);
-    }
-
-    static bool WasCancelJustPressed()
-    {
-        return CONTROLS::IS_CONTROL_JUST_PRESSED(2, 202)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 202)
-            || CONTROLS::IS_CONTROL_JUST_PRESSED(2, 238)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 238);
-    }
-
     static float DistanceSquared(
         const Vector3& left,
         const ExteriorPoint& right)
@@ -389,6 +373,78 @@ namespace SellCompletion
         Reset();
     }
 
+    bool WantsInput()
+    {
+        return g_state == CompletionState::Idle
+            && g_sellContextActive
+            && g_lastSellPrice > 0;
+    }
+
+    void OnAccept()
+    {
+        if (!WantsInput() || g_ignoreCurrentAccept)
+            return;
+
+        if (g_acceptStage == 0)
+        {
+            g_acceptStage = 1;
+            Log(
+                "sell flow advanced stage=1 price=%d",
+                g_lastSellPrice);
+            return;
+        }
+
+        if (g_acceptStage == 1)
+        {
+            g_acceptStage = 2;
+            Log(
+                "sell confirmation opened price=%d",
+                g_lastSellPrice);
+            return;
+        }
+
+        if (g_acceptStage != 2)
+            return;
+
+        if (!CaptureSaleTarget())
+        {
+            g_acceptStage = 0;
+            return;
+        }
+
+        const ULONGLONG now =
+            GetTickCount64();
+
+        g_acceptStage = 3;
+        g_state =
+            CompletionState::WaitingForFade;
+        g_stateStartedAt = now;
+        g_actionAt =
+            now + kPostConfirmDelayMs;
+
+        Log(
+            "final sell confirm detected; post-sale transition scheduled delayMs=%llu",
+            static_cast<unsigned long long>(
+                kPostConfirmDelayMs));
+    }
+
+    void OnCancel()
+    {
+        if (!WantsInput())
+            return;
+
+        if (g_acceptStage >= 2)
+        {
+            g_acceptStage = 1;
+            Log("sell confirmation cancelled; returned to sell submenu");
+        }
+        else
+        {
+            g_acceptStage = 0;
+            Log("sell flow cancelled/reset");
+        }
+    }
+
     void Reset()
     {
         ClearSellContext();
@@ -427,82 +483,10 @@ namespace SellCompletion
             g_sellContextActive = true;
             g_ignoreCurrentAccept = true;
             g_acceptStage = 0;
-
-            Log(
-                "sell context entered price=%d",
-                sellPrice);
             return;
         }
-
-        const bool acceptPressed =
-            WasAcceptJustPressed();
-        const bool cancelPressed =
-            WasCancelJustPressed();
 
         if (g_ignoreCurrentAccept)
-        {
-            if (!acceptPressed)
-                g_ignoreCurrentAccept = false;
-
-            return;
-        }
-
-        if (cancelPressed)
-        {
-            if (g_acceptStage >= 2)
-            {
-                g_acceptStage = 1;
-                Log("sell confirmation cancelled; returned to sell submenu");
-            }
-            else
-            {
-                g_acceptStage = 0;
-                Log("sell flow cancelled/reset");
-            }
-
-            return;
-        }
-
-        if (!acceptPressed)
-            return;
-
-        if (g_acceptStage == 0)
-        {
-            g_acceptStage = 1;
-            Log(
-                "sell flow advanced stage=1 price=%d",
-                sellPrice);
-            return;
-        }
-
-        if (g_acceptStage == 1)
-        {
-            g_acceptStage = 2;
-            Log(
-                "sell confirmation opened price=%d",
-                sellPrice);
-            return;
-        }
-
-        if (g_acceptStage != 2)
-            return;
-
-        if (!CaptureSaleTarget())
-        {
-            g_acceptStage = 0;
-            return;
-        }
-
-        g_acceptStage = 3;
-        g_state =
-            CompletionState::WaitingForFade;
-        g_stateStartedAt = now;
-        g_actionAt =
-            now + kPostConfirmDelayMs;
-
-        Log(
-            "final sell confirm detected; post-sale transition scheduled delayMs=%llu",
-            static_cast<unsigned long long>(
-                kPostConfirmDelayMs));
+            g_ignoreCurrentAccept = false;
     }
 }
