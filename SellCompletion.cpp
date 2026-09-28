@@ -77,22 +77,6 @@ namespace
         g_logger(buffer);
     }
 
-    static bool WasAcceptJustPressed()
-    {
-        return CONTROLS::IS_CONTROL_JUST_PRESSED(2, 201)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 201)
-            || CONTROLS::IS_CONTROL_JUST_PRESSED(2, 237)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 237);
-    }
-
-    static bool WasCancelJustPressed()
-    {
-        return CONTROLS::IS_CONTROL_JUST_PRESSED(2, 202)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 202)
-            || CONTROLS::IS_CONTROL_JUST_PRESSED(2, 238)
-            || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, 238);
-    }
-
     static float DistanceSquared(
         const Vector3& left,
         const ExteriorPoint& right)
@@ -398,7 +382,9 @@ namespace SellCompletion
     void Update(
         bool shopActive,
         bool sellContextActive,
-        int sellPrice)
+        int sellPrice,
+        bool acceptPressed,
+        bool cancelPressed)
     {
         const ULONGLONG now =
             GetTickCount64();
@@ -433,11 +419,6 @@ namespace SellCompletion
                 sellPrice);
             return;
         }
-
-        const bool acceptPressed =
-            WasAcceptJustPressed();
-        const bool cancelPressed =
-            WasCancelJustPressed();
 
         if (g_ignoreCurrentAccept)
         {
