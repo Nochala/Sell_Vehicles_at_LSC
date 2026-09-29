@@ -4868,17 +4868,13 @@ static void UpdatePhase3SellPriceFallback()
     }
 }
 
-static void UpdateSellCompletionController(
-    bool acceptPressed,
-    bool cancelPressed)
+static void UpdateSellCompletionController()
 {
     SellCompletion::Update(
         g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
-        g_phase3SellControlState,
-        acceptPressed,
-        cancelPressed);
+        g_phase3SellControlState);
 }
 
 static void ResetPhase3NativeProbeState()
@@ -6933,19 +6929,18 @@ void ScriptMain()
         UpdatePhase3SellPriceFallback();
         LogManualMarker();
 
-        bool acceptPressed = false;
-        bool cancelPressed = false;
-
-        if (g_carmodShopActive)
+        if (g_carmodShopActive
+            && g_logControls)
         {
+            bool acceptPressed = false;
+            bool cancelPressed = false;
+
             PollRelevantControls(
                 acceptPressed,
                 cancelPressed);
         }
 
-        UpdateSellCompletionController(
-            acceptPressed,
-            cancelPressed);
+        UpdateSellCompletionController();
 
         PollPeriodicSnapshot(now);
     }
