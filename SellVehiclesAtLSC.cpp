@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.9 Phase 3O exact Sell-state trigger";
+static const char* kBuildTag = "v0.3.10 Phase 3O exact Sell-state runtime";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -4122,9 +4122,21 @@ static bool TryGetPhase3SwitchStaticIndex(
         return false;
     }
 
+    // The value feeding SWITCH must be immediately before it. Decode that
+    // expression backwards instead of grabbing only the final IOFFSET load.
+    //
+    // Example from Legacy build 93 DO_STAGE_SELL:
+    //   STATIC_U16       0x02F1  (753)
+    //   IOFFSET_U8       0x77     (+119)
+    //   IOFFSET_U8_LOAD  0x05     (+5)
+    //   SWITCH
+    // The correct iControl slot is therefore 877, not 758.
+    int64_t accumulatedOffset = 0;
+    bool sawOffsetExpression = false;
+
     const size_t firstIndex =
-        switchInstructionIndex > 8
-            ? switchInstructionIndex - 8
+        switchInstructionIndex > 12
+            ? switchInstructionIndex - 12
             : 0;
 
     for (size_t i = switchInstructionIndex;
@@ -4141,29 +4153,29 @@ static bool TryGetPhase3SwitchStaticIndex(
         if (!op)
             return false;
 
-        if (*op == 0x50
-            || *op == 0x5F)
+        // Direct static load feeding SWITCH.
+        if (!sawOffsetExpression
+            && (*op == 0x50
+                || *op == 0x5F))
         {
+            uint32_t directIndex = 0;
             if (!ReadScriptUnsigned(
                     program,
                     position + 1,
                     *op == 0x50 ? 2U : 3U,
-                    staticIndex))
+                    directIndex))
             {
                 return false;
             }
 
+            staticIndex = directIndex;
             return true;
         }
 
-        if (*op != 0x41
-            && *op != 0x47)
-        {
-            continue;
-        }
-
-        int64_t fieldOffset = 0;
-        if (*op == 0x41)
+        // Address-offset and address-offset-load instructions all contribute
+        // to the final static address. Keep walking until the STATIC base.
+        if (*op == 0x40
+            || *op == 0x41)
         {
             uint32_t rawOffset = 0;
             if (!ReadScriptUnsigned(
@@ -4175,11 +4187,15 @@ static bool TryGetPhase3SwitchStaticIndex(
                 return false;
             }
 
-            fieldOffset =
+            accumulatedOffset +=
                 static_cast<int64_t>(
                     rawOffset);
+            sawOffsetExpression = true;
+            continue;
         }
-        else
+
+        if (*op == 0x46
+            || *op == 0x47)
         {
             int16_t rawOffset = 0;
             if (!ReadScriptSigned16(
@@ -4190,39 +4206,22 @@ static bool TryGetPhase3SwitchStaticIndex(
                 return false;
             }
 
-            fieldOffset =
+            accumulatedOffset +=
                 static_cast<int64_t>(
                     rawOffset);
+            sawOffsetExpression = true;
+            continue;
         }
 
-        const size_t baseFirst =
-            i > 4 ? i - 4 : 0;
-
-        for (size_t baseIndex = i;
-             baseIndex-- > baseFirst;)
+        if (sawOffsetExpression
+            && (*op == 0x4F
+                || *op == 0x5E))
         {
-            const uint32_t basePosition =
-                instructionPositions[baseIndex];
-
-            unsigned char* baseOp =
-                ScriptCodePointer(
-                    program,
-                    basePosition);
-
-            if (!baseOp)
-                return false;
-
-            if (*baseOp != 0x4F
-                && *baseOp != 0x5E)
-            {
-                continue;
-            }
-
             uint32_t baseStatic = 0;
             if (!ReadScriptUnsigned(
                     program,
-                    basePosition + 1,
-                    *baseOp == 0x4F ? 2U : 3U,
+                    position + 1,
+                    *op == 0x4F ? 2U : 3U,
                     baseStatic))
             {
                 return false;
@@ -4231,7 +4230,7 @@ static bool TryGetPhase3SwitchStaticIndex(
             const int64_t resolved =
                 static_cast<int64_t>(
                     baseStatic)
-                + fieldOffset;
+                + accumulatedOffset;
 
             if (resolved < 0
                 || resolved > 0xFFFFFF)
@@ -4244,6 +4243,15 @@ static bool TryGetPhase3SwitchStaticIndex(
                     resolved);
             return true;
         }
+
+        // Once an offset expression has started, any unrelated opcode means
+        // this is not the simple static-address chain we require.
+        if (sawOffsetExpression)
+            return false;
+
+        // Before the expression starts, do not wander arbitrarily far through
+        // unrelated stack operations.
+        return false;
     }
 
     return false;
@@ -4691,26 +4699,6 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3PriceThreadCached = true;
     }
 
-    ReadPhase3SellControlState(
-        g_phase3SellControlState);
-
-    if (g_phase3SellControlState
-            != g_phase3LastLoggedSellControlState)
-    {
-        Logf(
-            "[Phase3P] SellControl state=%d resolved=%s staticIndex=%u",
-            g_phase3SellControlState,
-            g_phase3SellControlPath.resolved
-                ? "yes"
-                : "no",
-            static_cast<unsigned int>(
-                g_phase3SellControlPath
-                    .staticIndex));
-
-        g_phase3LastLoggedSellControlState =
-            g_phase3SellControlState;
-    }
-
     const uint32_t index =
         g_phase3SellPricePath.element0StaticIndex;
 
@@ -4865,6 +4853,75 @@ static void UpdatePhase3SellPriceFallback()
             fallbackPrice,
             static_cast<unsigned int>(index));
         g_phase3FallbackLogged = true;
+    }
+}
+
+static void UpdatePhase3SellControlStateFast()
+{
+    if (!g_phase3Enabled
+        || !g_carmodShopActive
+        || g_lastNetworkGame
+        || !g_phase3SellControlPath.resolved
+        || !g_phase3PriceThreadCached
+        || !g_phase3PriceThreadInfo.stack)
+    {
+        g_phase3SellControlState = -1;
+        return;
+    }
+
+    const uint32_t index =
+        g_phase3SellControlPath.staticIndex;
+
+    if (index >= g_phase3PriceThreadInfo.stackSize)
+    {
+        g_phase3SellControlState = -1;
+        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+        g_phase3PriceThreadCached = false;
+        return;
+    }
+
+    // The thread/stack and bounds were validated when the cache was acquired.
+    // Keep this hot path to one direct 8-byte read so it is safe to run every
+    // frame and cannot miss Rockstar's short-lived iControl=2 state.
+    const unsigned char* slot =
+        reinterpret_cast<const unsigned char*>(
+            g_phase3PriceThreadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    std::memcpy(
+        &raw,
+        slot,
+        sizeof(raw));
+
+    const int value =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    g_phase3SellControlState =
+        value >= 0 && value <= 3
+            ? value
+            : -1;
+
+    if (g_phase3SellControlState
+            != g_phase3LastLoggedSellControlState)
+    {
+        Logf(
+            "[Phase3P] SellControl state=%d staticIndex=%u raw=0x%016llX",
+            g_phase3SellControlState,
+            static_cast<unsigned int>(
+                index),
+            static_cast<unsigned long long>(
+                raw));
+
+        g_phase3LastLoggedSellControlState =
+            g_phase3SellControlState;
+
+        // Event-driven diagnostic flush only. This happens at most a handful
+        // of times during a Sell flow and avoids losing the critical 0/1/2/3
+        // evidence if the game is closed while carmod_shop is still active.
+        FlushLogBuffer();
     }
 }
 
@@ -6868,7 +6925,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.9 fixes the GTA V SWITCH case-target decoder and requires Rockstar's structurally resolved DO_STAGE_SELL iControl state; the input-count fallback is no longer used.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.10 resolves the complete STATIC+IOFFSET chain feeding Rockstar's DO_STAGE_SELL switch and samples that one cached iControl slot every frame so short-lived accepted states cannot be missed. No input-count fallback is used.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
@@ -6927,6 +6984,7 @@ void ScriptMain()
         UpdatePhase2SellExposure();
         UpdatePhase3Diagnostics();
         UpdatePhase3SellPriceFallback();
+        UpdatePhase3SellControlStateFast();
         LogManualMarker();
 
         if (g_carmodShopActive
