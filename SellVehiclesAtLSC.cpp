@@ -5177,22 +5177,31 @@ static void UpdatePhase3SellControlStateFast()
     if (g_phase3CurrentMenuState
             != g_phase3LastLoggedMenuState)
     {
-        Logf(
-            "[Phase3P] SellStage currentMenu=%d sellMenu=%d active=%s staticIndex=%u raw=0x%016llX",
-            g_phase3CurrentMenuState,
-            g_phase3SellStagePath.sellMenuValue,
-            g_phase3SellStageActive
-                ? "yes"
-                : "no",
-            static_cast<unsigned int>(
-                menuIndex),
-            static_cast<unsigned long long>(
-                menuRaw));
+        const bool crossedSellBoundary =
+            g_phase3CurrentMenuState
+                == g_phase3SellStagePath.sellMenuValue
+            || g_phase3LastLoggedMenuState
+                == g_phase3SellStagePath.sellMenuValue;
+
+        if (crossedSellBoundary)
+        {
+            Logf(
+                "[Phase3P] SellStage currentMenu=%d sellMenu=%d active=%s staticIndex=%u raw=0x%016llX",
+                g_phase3CurrentMenuState,
+                g_phase3SellStagePath.sellMenuValue,
+                g_phase3SellStageActive
+                    ? "yes"
+                    : "no",
+                static_cast<unsigned int>(
+                    menuIndex),
+                static_cast<unsigned long long>(
+                    menuRaw));
+
+            FlushLogBuffer();
+        }
 
         g_phase3LastLoggedMenuState =
             g_phase3CurrentMenuState;
-
-        FlushLogBuffer();
     }
 
     if (!g_phase3SellStageActive)
