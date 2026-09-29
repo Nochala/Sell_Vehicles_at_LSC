@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.15 Phase 3N GTACars native pricing";
+static const char* kBuildTag = "v0.3.16 Phase 3N native Sell price display";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -527,6 +527,8 @@ struct Phase3SellPricePath
     uint32_t priceAddressPosition;
     uint32_t initializerCall;
     VmFunctionRange initializerFunction;
+    uint32_t registerNativeSite;
+    uint16_t registerNativeIndex;
 };
 
 struct Phase3SellControlPath
@@ -547,6 +549,26 @@ struct Phase3SellStagePath
 };
 
 static Phase3SellPricePath g_phase3SellPricePath{};
+
+struct Phase3SellDisplayPriceHook
+{
+    Phase2ScrProgram* program;
+    uint32_t nativeSite;
+    uint16_t nativeIndex;
+    Phase3NativeHandler original;
+    bool installed;
+};
+
+static Phase3SellDisplayPriceHook g_phase3SellDisplayPriceHook{};
+static Vehicle g_phase3PreparedVehicle = 0;
+static Hash g_phase3PreparedModel = 0;
+static int g_phase3PreparedMenuState = -999;
+static int g_phase3PreparedSellPrice = 0;
+static bool g_phase3PreparedSellPriceValid = false;
+static bool g_phase3DisplayPriceEventPending = false;
+static int g_phase3DisplayPriceOriginal = 0;
+static int g_phase3DisplayPriceInjected = 0;
+
 static Vehicle g_phase3FallbackVehicle = 0;
 static Hash g_phase3FallbackModel = 0;
 static int g_phase3FallbackPrice = 0;
@@ -1710,6 +1732,10 @@ static void UpdatePhase2SellExposure()
             g_phase3TraceUntil = 0;
             g_phase2NetworkGameNativeIndex = 0xFFFF;
             g_phase3SellPricePath = Phase3SellPricePath{};
+            g_phase3SellDisplayPriceHook =
+                Phase3SellDisplayPriceHook{};
+            ResetPhase3PreparedSellPrice();
+            g_phase3DisplayPriceEventPending = false;
             g_phase3SellControlPath = Phase3SellControlPath{};
             g_phase3SellStagePath = Phase3SellStagePath{};
             g_phase3SellControlState = -1;
@@ -3711,6 +3737,85 @@ static bool ResolvePhase3SellPricePath(
         return false;
     }
 
+    uint32_t registerNativeSite = 0;
+    uint16_t registerNativeIndex = 0xFFFF;
+    int registerNativeMatches = 0;
+
+    // Rockstar registers sData.iOptionCost[0] immediately after assigning the
+    // Sell value and before composing the visible ITEM_COST text. Resolve that
+    // exact SECURITY::REGISTER_SCRIPT_VARIABLE use by matching the same
+    // iOptionCost[0] address expression followed by a one-argument/zero-return
+    // NATIVE. No native hash or build-specific native index is hardcoded.
+    for (uint32_t position = sellHandler.start;
+         position < itemCostPush;)
+    {
+        uint32_t length = 0;
+        if (!GetVmInstructionLength(
+                program,
+                position,
+                length))
+        {
+            return false;
+        }
+
+        uint16_t candidateBase = 0;
+        int16_t candidateOffset = 0;
+        uint8_t candidateStride = 0;
+        uint32_t sequenceEnd = 0;
+
+        if (MatchSellPriceArraySequence(
+                program,
+                position,
+                false,
+                candidateBase,
+                candidateOffset,
+                candidateStride,
+                sequenceEnd)
+            && candidateBase == staticBaseIndex
+            && candidateOffset == fieldOffset
+            && candidateStride == arrayStride)
+        {
+            unsigned char* nativeOp =
+                ScriptCodePointer(
+                    program,
+                    sequenceEnd);
+
+            if (nativeOp
+                && *nativeOp == kVmNative)
+            {
+                uint8_t packed = 0;
+                uint16_t nativeIndex = 0;
+
+                if (ReadVmNativeSignature(
+                        program,
+                        sequenceEnd,
+                        packed,
+                        nativeIndex)
+                    && (packed >> 2) == 1
+                    && (packed & 0x03) == 0)
+                {
+                    ++registerNativeMatches;
+                    registerNativeSite =
+                        sequenceEnd;
+                    registerNativeIndex =
+                        nativeIndex;
+                }
+            }
+        }
+
+        position += length;
+    }
+
+    if (registerNativeMatches != 1
+        || registerNativeSite == 0
+        || registerNativeIndex == 0xFFFF)
+    {
+        Logf(
+            "[Phase3L] SellPricePath=no reason=price REGISTER_SCRIPT_VARIABLE site not unique matches=%d",
+            registerNativeMatches);
+        return false;
+    }
+
     uint32_t priceAddressPosition = 0;
     uint32_t initializerCall = 0;
     VmFunctionRange initializerFunction{};
@@ -3892,15 +3997,22 @@ static bool ResolvePhase3SellPricePath(
         initializerCall;
     g_phase3SellPricePath.initializerFunction =
         initializerFunction;
+    g_phase3SellPricePath.registerNativeSite =
+        registerNativeSite;
+    g_phase3SellPricePath.registerNativeIndex =
+        registerNativeIndex;
 
     Logf(
-        "[Phase3L] SellPricePath=yes itemCostPush=0x%X priceLoad=0x%X priceAddress=0x%X initializerCall=0x%X initializerFunc=%d@0x%X staticBase=%u fieldOffset=%d stride=%u element0StaticIndex=%u validatedUses=%d",
+        "[Phase3L] SellPricePath=yes itemCostPush=0x%X priceLoad=0x%X priceAddress=0x%X initializerCall=0x%X initializerFunc=%d@0x%X registerSite=0x%X registerNativeIndex=%u staticBase=%u fieldOffset=%d stride=%u element0StaticIndex=%u validatedUses=%d",
         itemCostPush,
         priceLoadPosition,
         priceAddressPosition,
         initializerCall,
         initializerFunction.index,
         initializerFunction.start,
+        registerNativeSite,
+        static_cast<unsigned int>(
+            registerNativeIndex),
         static_cast<unsigned int>(
             staticBaseIndex),
         static_cast<int>(fieldOffset),
@@ -5896,6 +6008,101 @@ static bool EstimatePhase3VehicleSellPrice(
     return true;
 }
 
+static void ResetPhase3PreparedSellPrice()
+{
+    g_phase3PreparedVehicle = 0;
+    g_phase3PreparedModel = 0;
+    g_phase3PreparedMenuState = -999;
+    g_phase3PreparedSellPrice = 0;
+    g_phase3PreparedSellPriceValid = false;
+}
+
+static void UpdatePhase3PreparedSellPrice()
+{
+    if (g_phase3CurrentMenuState < 0
+        || g_phase3SellStageActive)
+    {
+        return;
+    }
+
+    const Ped playerPed =
+        PLAYER::PLAYER_PED_ID();
+
+    if (!PED::IS_PED_IN_ANY_VEHICLE(
+            playerPed,
+            false))
+    {
+        ResetPhase3PreparedSellPrice();
+        return;
+    }
+
+    const Vehicle vehicle =
+        PED::GET_VEHICLE_PED_IS_IN(
+            playerPed,
+            false);
+
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        ResetPhase3PreparedSellPrice();
+        return;
+    }
+
+    const Hash model =
+        ENTITY::GET_ENTITY_MODEL(vehicle);
+
+    // Recalculate only when the vehicle changes or the player changes LSC
+    // menus. Returning from an upgrade category to the main menu therefore
+    // picks up newly installed modifications without repeatedly scanning all
+    // mod slots while the player simply sits on one menu.
+    if (g_phase3PreparedSellPriceValid
+        && vehicle == g_phase3PreparedVehicle
+        && model == g_phase3PreparedModel
+        && g_phase3CurrentMenuState
+            == g_phase3PreparedMenuState)
+    {
+        return;
+    }
+
+    Phase3VehiclePriceEstimate estimate{};
+    if (!EstimatePhase3VehicleSellPrice(
+            vehicle,
+            model,
+            estimate))
+    {
+        ResetPhase3PreparedSellPrice();
+        return;
+    }
+
+    g_phase3PreparedVehicle = vehicle;
+    g_phase3PreparedModel = model;
+    g_phase3PreparedMenuState =
+        g_phase3CurrentMenuState;
+    g_phase3PreparedSellPrice =
+        estimate.dynamicSellPrice;
+    g_phase3PreparedSellPriceValid =
+        g_phase3PreparedSellPrice > 0;
+}
+
+static void FlushPhase3DisplayPriceEvent()
+{
+    if (!g_phase3DisplayPriceEventPending)
+        return;
+
+    g_phase3DisplayPriceEventPending = false;
+
+    Logf(
+        "[Phase3N] SellPriceDisplay injected=yes rockstarInitial=%d displayed=%d preparedDynamic=%d registerSite=0x%X nativeIndex=%u",
+        g_phase3DisplayPriceOriginal,
+        g_phase3DisplayPriceInjected,
+        g_phase3PreparedSellPrice,
+        g_phase3SellPricePath.registerNativeSite,
+        static_cast<unsigned int>(
+            g_phase3SellPricePath.registerNativeIndex));
+
+    FlushLogBuffer();
+}
+
 static void UpdatePhase3SellPriceFallback()
 {
     if (!g_phase3Enabled
@@ -5944,6 +6151,8 @@ static void UpdatePhase3SellPriceFallback()
     }
 
     UpdatePhase3SellControlStateFast();
+    UpdatePhase3PreparedSellPrice();
+    FlushPhase3DisplayPriceEvent();
 
     if (!g_phase3SellStageActive)
         return;
@@ -6208,6 +6417,7 @@ static void UpdatePhase3SellControlStateFast()
                 g_phase3FallbackModel = 0;
                 g_phase3FallbackPrice = 0;
                 g_phase3FallbackLogged = false;
+                g_phase3PreparedMenuState = -999;
             }
 
             FlushLogBuffer();
@@ -6377,6 +6587,182 @@ static bool WritePhase3NativeHandlerSlot(
         &ignored);
 
     return *slot == handler;
+}
+
+static void Phase3SellDisplayPriceRegisterHook(
+    Phase3NativeCallContext* context)
+{
+    Phase3NativeHandler original =
+        g_phase3SellDisplayPriceHook.original;
+
+    if (!original
+        || original
+            == &Phase3SellDisplayPriceRegisterHook)
+    {
+        return;
+    }
+
+    // SECURITY::REGISTER_SCRIPT_VARIABLE receives INT*. Only modify the call
+    // whose pointer is exactly the structurally resolved iOptionCost[0] stack
+    // slot. Every other registration is a pure pass-through.
+    if (g_carmodShopActive
+        && !g_lastNetworkGame
+        && g_phase3PreparedSellPriceValid
+        && g_phase3PreparedSellPrice > 0
+        && g_phase3PriceThreadCached
+        && g_phase3PriceThreadInfo.stack
+        && context
+        && context->args
+        && context->argCount >= 1
+        && g_phase3SellPricePath.resolved
+        && g_phase3SellPricePath.element0StaticIndex
+            < g_phase3PriceThreadInfo.stackSize)
+    {
+        unsigned char* expectedSlot =
+            reinterpret_cast<unsigned char*>(
+                g_phase3PriceThreadInfo.stack)
+            + static_cast<size_t>(
+                g_phase3SellPricePath
+                    .element0StaticIndex)
+                * sizeof(uintptr_t);
+
+        const uint64_t* rawArgs =
+            reinterpret_cast<const uint64_t*>(
+                context->args);
+
+        const uintptr_t registeredPointer =
+            static_cast<uintptr_t>(
+                rawArgs[0]);
+
+        if (registeredPointer
+            == reinterpret_cast<uintptr_t>(
+                expectedSlot))
+        {
+            int32_t rockstarInitial = 0;
+            std::memcpy(
+                &rockstarInitial,
+                expectedSlot,
+                sizeof(rockstarInitial));
+
+            const int correctedPrice =
+                rockstarInitial
+                    > g_phase3PreparedSellPrice
+                ? static_cast<int>(
+                    rockstarInitial)
+                : g_phase3PreparedSellPrice;
+
+            if (correctedPrice > 0
+                && correctedPrice
+                    != rockstarInitial)
+            {
+                const int32_t corrected =
+                    static_cast<int32_t>(
+                        correctedPrice);
+
+                // Write before calling Rockstar's security native so its
+                // protected shadow copy records the corrected value too.
+                std::memcpy(
+                    expectedSlot,
+                    &corrected,
+                    sizeof(corrected));
+            }
+
+            g_phase3DisplayPriceOriginal =
+                static_cast<int>(
+                    rockstarInitial);
+            g_phase3DisplayPriceInjected =
+                correctedPrice;
+            g_phase3DisplayPriceEventPending =
+                true;
+        }
+    }
+
+    original(context);
+}
+
+static bool InstallPhase3SellDisplayPriceHook(
+    Phase2ScrProgram* program)
+{
+    if (!program
+        || !g_phase3SellPricePath.resolved
+        || g_phase3SellPricePath.registerNativeIndex
+            == 0xFFFF
+        || g_phase3SellPricePath.registerNativeSite == 0
+        || program->nativeCount <= 0
+        || !program->nativeOffset
+        || g_phase3SellPricePath.registerNativeIndex
+            >= static_cast<uint16_t>(
+                program->nativeCount))
+    {
+        return false;
+    }
+
+    if (g_phase3SellDisplayPriceHook.installed
+        && g_phase3SellDisplayPriceHook.program
+            == program
+        && g_phase3SellDisplayPriceHook.nativeIndex
+            == g_phase3SellPricePath.registerNativeIndex)
+    {
+        return true;
+    }
+
+    Phase3NativeHandler* table =
+        reinterpret_cast<Phase3NativeHandler*>(
+            program->nativeOffset);
+
+    if (!IsReadableMemory(
+            table,
+            sizeof(Phase3NativeHandler)
+                * static_cast<size_t>(
+                    program->nativeCount)))
+    {
+        return false;
+    }
+
+    const uint16_t nativeIndex =
+        g_phase3SellPricePath.registerNativeIndex;
+
+    Phase3NativeHandler original =
+        table[nativeIndex];
+
+    if (!original
+        || original
+            == &Phase3SellDisplayPriceRegisterHook)
+    {
+        return false;
+    }
+
+    g_phase3SellDisplayPriceHook.program =
+        program;
+    g_phase3SellDisplayPriceHook.nativeSite =
+        g_phase3SellPricePath.registerNativeSite;
+    g_phase3SellDisplayPriceHook.nativeIndex =
+        nativeIndex;
+    g_phase3SellDisplayPriceHook.original =
+        original;
+    g_phase3SellDisplayPriceHook.installed =
+        false;
+
+    if (!WritePhase3NativeHandlerSlot(
+            program,
+            nativeIndex,
+            &Phase3SellDisplayPriceRegisterHook))
+    {
+        g_phase3SellDisplayPriceHook =
+            Phase3SellDisplayPriceHook{};
+        return false;
+    }
+
+    g_phase3SellDisplayPriceHook.installed =
+        true;
+
+    Logf(
+        "[Phase3N] SellPriceDisplayHook=yes registerSite=0x%X nativeIndex=%u scope=exact-iOptionCost0-pointer",
+        g_phase3SellDisplayPriceHook.nativeSite,
+        static_cast<unsigned int>(
+            nativeIndex));
+
+    return true;
 }
 
 static bool IsPhase3PcAtNativeSite(
@@ -7567,20 +7953,24 @@ static void UpdatePhase3Diagnostics()
         program,
         sellHandler);
 
-    // Phase 3K: do not install synchronous native detours in carmod_shop.
-    // Even pass-through probes execute on Rockstar's hot Sell path and can
-    // introduce severe hitching during confirmation/transaction processing.
-    // Keep the one-time structural diagnostics above, but leave runtime native
-    // handlers completely untouched.
+    // Keep the old synchronous diagnostic probes disabled. The one exception
+    // is a single low-frequency REGISTER_SCRIPT_VARIABLE hook used only to
+    // correct iOptionCost[0] before Rockstar composes the Sell price text.
+    // It performs no thread scan, no VM discovery, and no synchronous logging.
     ResetPhase3NativeProbeState();
 
+    const bool sellPriceDisplayHookInstalled =
+        InstallPhase3SellDisplayPriceHook(
+            program);
+
     Logf(
-        "[Phase3] Diagnostics READY nativeProbes=disabled runtimeTrace=disabled sellEligibility=%s highValueSellBypass=%s playerOwnedHelper=%s playerOwnedBypass=%s sellPricePath=%s. Phase 3M bypasses the CMOD_NOSELL1 high-value rejection and forces the Player_Vehicle ownership predicate true only at Sell-related CALL sites. No global ownership helper, network state, payout, deletion, or money state is modified.",
+        "[Phase3] Diagnostics READY nativeProbes=disabled runtimeTrace=disabled sellEligibility=%s highValueSellBypass=%s playerOwnedHelper=%s playerOwnedBypass=%s sellPricePath=%s sellPriceDisplayHook=%s. Phase 3M bypasses the CMOD_NOSELL1 high-value rejection and forces the Player_Vehicle ownership predicate true only at Sell-related CALL sites. The display hook is limited to the exact registered iOptionCost[0] pointer and performs no runtime scan.",
         sellEligibilityResolved ? "resolved" : "unresolved",
         highValueSellBypassApplied ? "yes" : "no",
         playerOwnedHelperResolved ? "resolved" : "unresolved",
         playerOwnedBypassApplied ? "yes" : "no",
-        g_phase3SellPricePath.resolved ? "resolved" : "unresolved");
+        g_phase3SellPricePath.resolved ? "resolved" : "unresolved",
+        sellPriceDisplayHookInstalled ? "yes" : "no");
 }
 
 static void ArmPhase3RuntimeTrace(
@@ -8277,7 +8667,7 @@ static void LogStartupState()
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles, then applies the documented 60%% resale basis plus 50%% of estimated installed upgrade value. Missing/newer/add-on models fall back to the class/model estimator. A higher positive Rockstar price is never reduced.");
+    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles, applies the 60%% resale basis plus 50%% of estimated installed upgrade value, and injects that final value into Rockstar's registered iOptionCost[0] before the native Sell menu composes its ITEM_COST text. Missing/newer/add-on models use the class/model fallback.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, and credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes.");
