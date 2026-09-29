@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.13 Phase 3O Story Mode payout";
+static const char* kBuildTag = "v0.3.14 Phase 3N dynamic vehicle pricing";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -4906,6 +4906,331 @@ static bool ResolvePhase3SellControlPath(
 
 static void UpdatePhase3SellControlStateFast();
 
+struct Phase3VehiclePriceEstimate
+{
+    int vehicleClass;
+    int modelValue;
+    int classMarketFloor;
+    int baseMarketValue;
+    int customizationRetailValue;
+    int installedModCount;
+    int performanceModCount;
+    int toggleModCount;
+    int dynamicSellPrice;
+};
+
+static const char* GetPhase3VehicleClassName(
+    int vehicleClass)
+{
+    static const char* kNames[] =
+    {
+        "Compacts",
+        "Sedans",
+        "SUVs",
+        "Coupes",
+        "Muscle",
+        "Sports Classics",
+        "Sports",
+        "Super",
+        "Motorcycles",
+        "Off-road",
+        "Industrial",
+        "Utility",
+        "Vans",
+        "Cycles",
+        "Boats",
+        "Helicopters",
+        "Planes",
+        "Service",
+        "Emergency",
+        "Military",
+        "Commercial",
+        "Trains",
+        "Open Wheel"
+    };
+
+    if (vehicleClass < 0
+        || vehicleClass
+            >= static_cast<int>(
+                sizeof(kNames)
+                / sizeof(kNames[0])))
+    {
+        return "Unknown";
+    }
+
+    return kNames[vehicleClass];
+}
+
+static int GetPhase3ClassMarketFloor(
+    int vehicleClass)
+{
+    // Replacement-value floors, not Sell prices. Stock resale is calculated
+    // from 60% of the corrected market value.
+    static const int kFloors[] =
+    {
+        25000,    // Compacts
+        35000,    // Sedans
+        50000,    // SUVs
+        65000,    // Coupes
+        60000,    // Muscle
+        175000,   // Sports Classics
+        250000,   // Sports
+        650000,   // Super
+        45000,    // Motorcycles
+        80000,    // Off-road
+        120000,   // Industrial
+        50000,    // Utility
+        45000,    // Vans
+        1500,     // Cycles
+        175000,   // Boats
+        650000,   // Helicopters
+        750000,   // Planes
+        60000,    // Service
+        120000,   // Emergency
+        450000,   // Military
+        150000,   // Commercial
+        250000,   // Trains
+        1200000   // Open Wheel
+    };
+
+    if (vehicleClass < 0
+        || vehicleClass
+            >= static_cast<int>(
+                sizeof(kFloors)
+                / sizeof(kFloors[0])))
+    {
+        return 30000;
+    }
+
+    return kFloors[vehicleClass];
+}
+
+static int GetPhase3InstalledModRetailValue(
+    int slot,
+    int installedIndex,
+    int availableCount)
+{
+    if (installedIndex < 0
+        || availableCount <= 0)
+    {
+        return 0;
+    }
+
+    const int level = installedIndex + 1;
+
+    switch (slot)
+    {
+    case 11: // Engine
+        return 8000 + level * 7000;
+
+    case 12: // Brakes
+        return 7000 + level * 6500;
+
+    case 13: // Transmission
+        return 8000 + level * 7500;
+
+    case 15: // Suspension
+        return 5000 + level * 5000;
+
+    case 16: // Armor
+        return 15000 + level * 14000;
+
+    case 23: // Front wheels
+    case 24: // Rear wheels
+        return 9000
+            + (level > 20
+                ? 20000
+                : level * 1000);
+
+    case 38: // Hydraulics
+        return 30000 + level * 5000;
+
+    case 39: // Engine block
+    case 40: // Air filter
+    case 41: // Struts
+        return 8000 + level * 2500;
+
+    default:
+        break;
+    }
+
+    if (slot >= 0 && slot <= 10)
+    {
+        const int value =
+            3500 + level * 1500;
+        return value > 18000
+            ? 18000
+            : value;
+    }
+
+    if (slot == 14)
+        return 3000 + level * 500;
+
+    if (slot >= 25 && slot <= 48)
+    {
+        const int value =
+            4000 + level * 1000;
+        return value > 16000
+            ? 16000
+            : value;
+    }
+
+    return 3000 + level * 1000;
+}
+
+static int EstimatePhase3CustomizationRetailValue(
+    Vehicle vehicle,
+    int& installedModCount,
+    int& performanceModCount,
+    int& toggleModCount)
+{
+    installedModCount = 0;
+    performanceModCount = 0;
+    toggleModCount = 0;
+
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        return 0;
+    }
+
+    int64_t total = 0;
+
+    for (int slot = 0;
+         slot <= 48;
+         ++slot)
+    {
+        // Known toggle/unused slots are handled separately below.
+        if (slot >= 17 && slot <= 22)
+            continue;
+
+        const int available =
+            VEHICLE::GET_NUM_VEHICLE_MODS(
+                vehicle,
+                slot);
+
+        if (available <= 0)
+            continue;
+
+        const int installed =
+            VEHICLE::GET_VEHICLE_MOD(
+                vehicle,
+                slot);
+
+        if (installed < 0)
+            continue;
+
+        ++installedModCount;
+
+        if (slot == 11
+            || slot == 12
+            || slot == 13
+            || slot == 15
+            || slot == 16)
+        {
+            ++performanceModCount;
+        }
+
+        total +=
+            GetPhase3InstalledModRetailValue(
+                slot,
+                installed,
+                available);
+
+        if ((slot == 23 || slot == 24)
+            && VEHICLE::GET_VEHICLE_MOD_VARIATION(
+                vehicle,
+                slot))
+        {
+            total += 4000;
+        }
+    }
+
+    if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 18))
+    {
+        total += 50000; // Turbo
+        ++toggleModCount;
+        ++performanceModCount;
+    }
+
+    if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 20))
+    {
+        total += 4000; // Tire smoke
+        ++toggleModCount;
+    }
+
+    if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 22))
+    {
+        total += 7500; // Xenon lights
+        ++toggleModCount;
+    }
+
+    if (total > 1000000LL)
+        total = 1000000LL;
+
+    return static_cast<int>(total);
+}
+
+static bool EstimatePhase3VehicleSellPrice(
+    Vehicle vehicle,
+    Hash model,
+    Phase3VehiclePriceEstimate& estimate)
+{
+    estimate = Phase3VehiclePriceEstimate{};
+
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        return false;
+    }
+
+    estimate.vehicleClass =
+        VEHICLE::GET_VEHICLE_CLASS(vehicle);
+
+    estimate.modelValue =
+        GetPhase3VehicleModelValue(model);
+
+    estimate.classMarketFloor =
+        GetPhase3ClassMarketFloor(
+            estimate.vehicleClass);
+
+    estimate.baseMarketValue =
+        estimate.modelValue
+            > estimate.classMarketFloor
+        ? estimate.modelValue
+        : estimate.classMarketFloor;
+
+    estimate.customizationRetailValue =
+        EstimatePhase3CustomizationRetailValue(
+            vehicle,
+            estimate.installedModCount,
+            estimate.performanceModCount,
+            estimate.toggleModCount);
+
+    // GTA-style resale estimate:
+    // 60% of corrected stock value + 50% of installed upgrade retail value.
+    int64_t sellPrice =
+        static_cast<int64_t>(
+            estimate.baseMarketValue)
+            * 60LL / 100LL;
+
+    sellPrice +=
+        static_cast<int64_t>(
+            estimate.customizationRetailValue)
+            * 50LL / 100LL;
+
+    if (sellPrice <= 0)
+        return false;
+
+    if (sellPrice > 2000000000LL)
+        sellPrice = 2000000000LL;
+
+    estimate.dynamicSellPrice =
+        static_cast<int>(sellPrice);
+
+    return true;
+}
+
 static void UpdatePhase3SellPriceFallback()
 {
     if (!g_phase3Enabled
@@ -4953,9 +5278,6 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3PriceThreadCached = true;
     }
 
-    // Refresh the current eMenu and Sell iControl from the cached stack before
-    // touching ITEM_COST. This prevents the Sell fallback from mutating price
-    // state during entrance/outro or any other LSC menu.
     UpdatePhase3SellControlStateFast();
 
     if (!g_phase3SellStageActive)
@@ -4991,14 +5313,6 @@ static void UpdatePhase3SellPriceFallback()
         static_cast<int32_t>(
             raw & 0xFFFFFFFFULL);
 
-    if (rockstarPrice > 0)
-    {
-        g_phase3SellContextActive = true;
-        g_phase3SellContextPrice =
-            static_cast<int>(rockstarPrice);
-        return;
-    }
-
     const Ped playerPed =
         PLAYER::PLAYER_PED_ID();
 
@@ -5032,90 +5346,111 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3FallbackLogged = false;
     }
 
-    int fallbackPrice = g_phase3FallbackPrice;
-
-    if (fallbackPrice <= 0)
+    if (g_phase3FallbackPrice <= 0)
     {
-        const int modelValue =
-            GetPhase3VehicleModelValue(
-                model);
+        Phase3VehiclePriceEstimate estimate{};
 
-        if (modelValue <= 0)
+        if (!EstimatePhase3VehicleSellPrice(
+                vehicle,
+                model,
+                estimate))
         {
             if (!g_phase3FallbackLogged)
             {
                 Logf(
-                    "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d modelValue=%d reason=model value unavailable",
+                    "[Phase3N] SellPriceDynamic=no vehicle=%d model=0x%08X rockstarPrice=%d reason=estimate unavailable",
                     static_cast<int>(vehicle),
                     static_cast<unsigned int>(model),
-                    static_cast<int>(rockstarPrice),
-                    modelValue);
+                    static_cast<int>(rockstarPrice));
                 g_phase3FallbackLogged = true;
+            }
+
+            if (rockstarPrice > 0)
+            {
+                g_phase3SellContextActive = true;
+                g_phase3SellContextPrice =
+                    static_cast<int>(rockstarPrice);
             }
 
             return;
         }
 
-        const int64_t scaled =
-            static_cast<int64_t>(modelValue) * 60LL;
+        const int finalPrice =
+            rockstarPrice > estimate.dynamicSellPrice
+                ? static_cast<int>(rockstarPrice)
+                : estimate.dynamicSellPrice;
 
-        fallbackPrice =
-            static_cast<int>(scaled / 100LL);
+        g_phase3FallbackPrice =
+            finalPrice;
 
-        if (fallbackPrice <= 0)
-            fallbackPrice = modelValue;
+        Logf(
+            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d classFloor=%d baseMarket=%d customizationRetail=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
+            static_cast<int>(vehicle),
+            static_cast<unsigned int>(model),
+            estimate.vehicleClass,
+            GetPhase3VehicleClassName(
+                estimate.vehicleClass),
+            static_cast<int>(rockstarPrice),
+            estimate.modelValue,
+            estimate.classMarketFloor,
+            estimate.baseMarketValue,
+            estimate.customizationRetailValue,
+            estimate.installedModCount,
+            estimate.performanceModCount,
+            estimate.toggleModCount,
+            estimate.dynamicSellPrice,
+            finalPrice,
+            rockstarPrice
+                    > estimate.dynamicSellPrice
+                ? "rockstar"
+                : "dynamic");
 
-        g_phase3FallbackPrice = fallbackPrice;
+        g_phase3FallbackLogged = true;
     }
 
-    const uint64_t patchedRaw =
-        (raw & 0xFFFFFFFF00000000ULL)
-        | static_cast<uint32_t>(
-            fallbackPrice);
+    const int finalPrice =
+        g_phase3FallbackPrice;
 
-    std::memcpy(
-        slot,
-        &patchedRaw,
-        sizeof(patchedRaw));
+    if (finalPrice <= 0)
+        return;
 
-    uint64_t verify = 0;
-    std::memcpy(&verify, slot, sizeof(verify));
-
-    const int32_t verifiedPrice =
-        static_cast<int32_t>(
-            verify & 0xFFFFFFFFULL);
-
-    if (verifiedPrice != fallbackPrice)
+    if (rockstarPrice != finalPrice)
     {
-        if (!g_phase3FallbackLogged)
+        const uint64_t patchedRaw =
+            (raw & 0xFFFFFFFF00000000ULL)
+            | static_cast<uint32_t>(
+                finalPrice);
+
+        std::memcpy(
+            slot,
+            &patchedRaw,
+            sizeof(patchedRaw));
+
+        uint64_t verify = 0;
+        std::memcpy(
+            &verify,
+            slot,
+            sizeof(verify));
+
+        const int32_t verifiedPrice =
+            static_cast<int32_t>(
+                verify & 0xFFFFFFFFULL);
+
+        if (verifiedPrice != finalPrice)
         {
             Logf(
-                "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d reason=write verification failed observed=%d",
+                "[Phase3N] SellPriceDynamic write failed vehicle=%d model=0x%08X requested=%d observed=%d",
                 static_cast<int>(vehicle),
                 static_cast<unsigned int>(model),
-                static_cast<int>(rockstarPrice),
-                fallbackPrice,
+                finalPrice,
                 static_cast<int>(verifiedPrice));
-            g_phase3FallbackLogged = true;
+            return;
         }
-
-        return;
     }
 
     g_phase3SellContextActive = true;
-    g_phase3SellContextPrice = fallbackPrice;
-
-    if (!g_phase3FallbackLogged)
-    {
-        Logf(
-            "[Phase3N] SellPriceFallback=yes vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d basis=GET_VEHICLE_MODEL_VALUE_60pct staticIndex=%u",
-            static_cast<int>(vehicle),
-            static_cast<unsigned int>(model),
-            static_cast<int>(rockstarPrice),
-            fallbackPrice,
-            static_cast<unsigned int>(index));
-        g_phase3FallbackLogged = true;
-    }
+    g_phase3SellContextPrice =
+        finalPrice;
 }
 
 static void UpdatePhase3SellControlStateFast()
@@ -5196,6 +5531,16 @@ static void UpdatePhase3SellControlStateFast()
                     menuIndex),
                 static_cast<unsigned long long>(
                     menuRaw));
+
+            if (!g_phase3SellStageActive)
+            {
+                // Re-estimate on the next Sell entry so upgrades installed
+                // during this LSC visit are reflected in resale value.
+                g_phase3FallbackVehicle = 0;
+                g_phase3FallbackModel = 0;
+                g_phase3FallbackPrice = 0;
+                g_phase3FallbackLogged = false;
+            }
 
             FlushLogBuffer();
         }
@@ -7264,10 +7609,10 @@ static void LogStartupState()
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
+    Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and dynamically estimates Story Mode resale value from vehicle class, GET_VEHICLE_MODEL_VALUE, and installed customization. It uses 60%% of the class-corrected base market value plus 50%% of estimated installed upgrade value, and only raises a positive Rockstar price when Rockstar's value is lower.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, and credits the captured sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes.");
+    Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, and credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
