@@ -4904,6 +4904,220 @@ static bool ResolvePhase3SellControlPath(
     return true;
 }
 
+static void UpdatePhase3SellControlStateFast();
+
+static void UpdatePhase3SellPriceFallback()
+{
+    if (!g_phase3Enabled
+        || !g_phase3SellPricePath.resolved
+        || !g_carmodShopActive
+        || g_lastNetworkGame)
+    {
+        g_phase3SellContextActive = false;
+        g_phase3SellContextPrice = 0;
+        g_phase3SellControlState = -1;
+        g_phase3SellStageActive = false;
+
+        if (!g_carmodShopActive)
+        {
+            g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+            g_phase3PriceThreadCached = false;
+            g_nextPhase3PriceUpdateAt = 0;
+        }
+
+        return;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_nextPhase3PriceUpdateAt)
+        return;
+
+    g_nextPhase3PriceUpdateAt =
+        now + kPhase3PriceUpdateIntervalMs;
+
+    g_phase3SellContextActive = false;
+    g_phase3SellContextPrice = 0;
+
+    if (!g_phase3PriceThreadCached)
+    {
+        Phase2ThreadInfo threadInfo{};
+        if (!GetPhase2ThreadInfo(
+                kCarmodShopHash,
+                threadInfo)
+            || !threadInfo.stack)
+        {
+            return;
+        }
+
+        g_phase3PriceThreadInfo = threadInfo;
+        g_phase3PriceThreadCached = true;
+    }
+
+    // Refresh the current eMenu and Sell iControl from the cached stack before
+    // touching ITEM_COST. This prevents the Sell fallback from mutating price
+    // state during entrance/outro or any other LSC menu.
+    UpdatePhase3SellControlStateFast();
+
+    if (!g_phase3SellStageActive)
+        return;
+
+    const uint32_t index =
+        g_phase3SellPricePath.element0StaticIndex;
+
+    if (index >= g_phase3PriceThreadInfo.stackSize)
+    {
+        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+        g_phase3PriceThreadCached = false;
+        return;
+    }
+
+    unsigned char* slot =
+        reinterpret_cast<unsigned char*>(
+            g_phase3PriceThreadInfo.stack)
+        + static_cast<size_t>(index)
+            * sizeof(uintptr_t);
+
+    uint64_t raw = 0;
+    if (!IsReadableMemory(slot, sizeof(raw)))
+    {
+        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
+        g_phase3PriceThreadCached = false;
+        return;
+    }
+
+    std::memcpy(&raw, slot, sizeof(raw));
+
+    const int32_t rockstarPrice =
+        static_cast<int32_t>(
+            raw & 0xFFFFFFFFULL);
+
+    if (rockstarPrice > 0)
+    {
+        g_phase3SellContextActive = true;
+        g_phase3SellContextPrice =
+            static_cast<int>(rockstarPrice);
+        return;
+    }
+
+    const Ped playerPed =
+        PLAYER::PLAYER_PED_ID();
+
+    if (!PED::IS_PED_IN_ANY_VEHICLE(
+            playerPed,
+            false))
+    {
+        return;
+    }
+
+    const Vehicle vehicle =
+        PED::GET_VEHICLE_PED_IS_IN(
+            playerPed,
+            false);
+
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        return;
+    }
+
+    const Hash model =
+        ENTITY::GET_ENTITY_MODEL(vehicle);
+
+    if (vehicle != g_phase3FallbackVehicle
+        || model != g_phase3FallbackModel)
+    {
+        g_phase3FallbackVehicle = vehicle;
+        g_phase3FallbackModel = model;
+        g_phase3FallbackPrice = 0;
+        g_phase3FallbackLogged = false;
+    }
+
+    int fallbackPrice = g_phase3FallbackPrice;
+
+    if (fallbackPrice <= 0)
+    {
+        const int modelValue =
+            GetPhase3VehicleModelValue(
+                model);
+
+        if (modelValue <= 0)
+        {
+            if (!g_phase3FallbackLogged)
+            {
+                Logf(
+                    "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d modelValue=%d reason=model value unavailable",
+                    static_cast<int>(vehicle),
+                    static_cast<unsigned int>(model),
+                    static_cast<int>(rockstarPrice),
+                    modelValue);
+                g_phase3FallbackLogged = true;
+            }
+
+            return;
+        }
+
+        const int64_t scaled =
+            static_cast<int64_t>(modelValue) * 60LL;
+
+        fallbackPrice =
+            static_cast<int>(scaled / 100LL);
+
+        if (fallbackPrice <= 0)
+            fallbackPrice = modelValue;
+
+        g_phase3FallbackPrice = fallbackPrice;
+    }
+
+    const uint64_t patchedRaw =
+        (raw & 0xFFFFFFFF00000000ULL)
+        | static_cast<uint32_t>(
+            fallbackPrice);
+
+    std::memcpy(
+        slot,
+        &patchedRaw,
+        sizeof(patchedRaw));
+
+    uint64_t verify = 0;
+    std::memcpy(&verify, slot, sizeof(verify));
+
+    const int32_t verifiedPrice =
+        static_cast<int32_t>(
+            verify & 0xFFFFFFFFULL);
+
+    if (verifiedPrice != fallbackPrice)
+    {
+        if (!g_phase3FallbackLogged)
+        {
+            Logf(
+                "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d reason=write verification failed observed=%d",
+                static_cast<int>(vehicle),
+                static_cast<unsigned int>(model),
+                static_cast<int>(rockstarPrice),
+                fallbackPrice,
+                static_cast<int>(verifiedPrice));
+            g_phase3FallbackLogged = true;
+        }
+
+        return;
+    }
+
+    g_phase3SellContextActive = true;
+    g_phase3SellContextPrice = fallbackPrice;
+
+    if (!g_phase3FallbackLogged)
+    {
+        Logf(
+            "[Phase3N] SellPriceFallback=yes vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d basis=GET_VEHICLE_MODEL_VALUE_60pct staticIndex=%u",
+            static_cast<int>(vehicle),
+            static_cast<unsigned int>(model),
+            static_cast<int>(rockstarPrice),
+            fallbackPrice,
+            static_cast<unsigned int>(index));
+        g_phase3FallbackLogged = true;
+    }
+}
+
 static void UpdatePhase3SellControlStateFast()
 {
     g_phase3SellStageActive = false;
@@ -4983,22 +5197,14 @@ static void UpdatePhase3SellControlStateFast()
 
     if (!g_phase3SellStageActive)
     {
-        if (g_phase3SellControlState != -1)
-        {
-            g_phase3SellControlState = -1;
+        g_phase3SellControlState = -1;
 
-            if (g_phase3SellControlState
-                    != g_phase3LastLoggedSellControlState)
-            {
-                Logf(
-                    "[Phase3P] SellControl state=-1 reason=not-in-sell-stage");
-                g_phase3LastLoggedSellControlState = -1;
-                FlushLogBuffer();
-            }
-        }
-        else
+        if (g_phase3LastLoggedSellControlState != -1)
         {
-            g_phase3SellControlState = -1;
+            Logf(
+                "[Phase3P] SellControl state=-1 reason=not-in-sell-stage");
+            g_phase3LastLoggedSellControlState = -1;
+            FlushLogBuffer();
         }
 
         return;
@@ -5038,75 +5244,6 @@ static void UpdatePhase3SellControlStateFast()
         g_phase3LastLoggedSellControlState =
             g_phase3SellControlState;
 
-        FlushLogBuffer();
-    }
-}
-
-static void UpdatePhase3SellControlStateFast()
-{
-    if (!g_phase3Enabled
-        || !g_carmodShopActive
-        || g_lastNetworkGame
-        || !g_phase3SellControlPath.resolved
-        || !g_phase3PriceThreadCached
-        || !g_phase3PriceThreadInfo.stack)
-    {
-        g_phase3SellControlState = -1;
-        return;
-    }
-
-    const uint32_t index =
-        g_phase3SellControlPath.staticIndex;
-
-    if (index >= g_phase3PriceThreadInfo.stackSize)
-    {
-        g_phase3SellControlState = -1;
-        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
-        g_phase3PriceThreadCached = false;
-        return;
-    }
-
-    // The thread/stack and bounds were validated when the cache was acquired.
-    // Keep this hot path to one direct 8-byte read so it is safe to run every
-    // frame and cannot miss Rockstar's short-lived iControl=2 state.
-    const unsigned char* slot =
-        reinterpret_cast<const unsigned char*>(
-            g_phase3PriceThreadInfo.stack)
-        + static_cast<size_t>(index)
-            * sizeof(uintptr_t);
-
-    uint64_t raw = 0;
-    std::memcpy(
-        &raw,
-        slot,
-        sizeof(raw));
-
-    const int value =
-        static_cast<int32_t>(
-            raw & 0xFFFFFFFFULL);
-
-    g_phase3SellControlState =
-        value >= 0 && value <= 3
-            ? value
-            : -1;
-
-    if (g_phase3SellControlState
-            != g_phase3LastLoggedSellControlState)
-    {
-        Logf(
-            "[Phase3P] SellControl state=%d staticIndex=%u raw=0x%016llX",
-            g_phase3SellControlState,
-            static_cast<unsigned int>(
-                index),
-            static_cast<unsigned long long>(
-                raw));
-
-        g_phase3LastLoggedSellControlState =
-            g_phase3SellControlState;
-
-        // Event-driven diagnostic flush only. This happens at most a handful
-        // of times during a Sell flow and avoids losing the critical 0/1/2/3
-        // evidence if the game is closed while carmod_shop is still active.
         FlushLogBuffer();
     }
 }
