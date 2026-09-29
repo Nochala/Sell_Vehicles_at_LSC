@@ -36,7 +36,7 @@ namespace
         { 118.6830f, 6618.4130f, 30.9185f, 0.450f, "Paleto Bay" }
     };
 
-    static constexpr ULONGLONG kPostConfirmDelayMs = 500ULL;
+    static constexpr ULONGLONG kPostConfirmDelayMs = 2000ULL;
     static constexpr int kFadeOutMs = 350;
     static constexpr int kFadeInMs = 500;
     static constexpr ULONGLONG kFadeOutTimeoutMs = 1500ULL;
