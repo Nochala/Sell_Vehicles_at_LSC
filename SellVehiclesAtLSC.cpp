@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.8 Phase 3O confirmed-sale delay";
+static const char* kBuildTag = "v0.3.9 Phase 3O exact Sell-state trigger";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -4412,7 +4412,7 @@ static bool ResolvePhase3SellControlPath(
                 + entry * 6;
 
             uint32_t caseValue = 0;
-            uint32_t relative = 0;
+            uint32_t relativeRaw = 0;
 
             if (!ReadScriptUnsigned(
                     program,
@@ -4423,7 +4423,7 @@ static bool ResolvePhase3SellControlPath(
                     program,
                     entryPosition + 4,
                     2,
-                    relative))
+                    relativeRaw))
             {
                 continue;
             }
@@ -4431,18 +4431,27 @@ static bool ResolvePhase3SellControlPath(
             if (caseValue > 3)
                 continue;
 
-            // The VM adds each SWITCH offset to the code pointer after GET_U16.
-            const uint64_t target64 =
-                static_cast<uint64_t>(
-                    entryPosition + 5)
-                + static_cast<uint64_t>(
+            const int16_t relative =
+                static_cast<int16_t>(
+                    relativeRaw & 0xFFFFU);
+
+            // GTA V SWITCH cases are six-byte entries:
+            //   u32 caseValue + s16 relativeOffset
+            // The jump base is the byte immediately after that entire entry.
+            // Previous builds incorrectly used entryPosition + 5, which put
+            // every resolved case target one byte before the real opcode.
+            const int64_t target64 =
+                static_cast<int64_t>(
+                    entryPosition)
+                + 6
+                + static_cast<int64_t>(
                     relative);
 
             if (target64
-                    >= static_cast<uint64_t>(
+                    >= static_cast<int64_t>(
                         sellHandler.end)
                 || target64
-                    < static_cast<uint64_t>(
+                    < static_cast<int64_t>(
                         sellHandler.start))
             {
                 continue;
@@ -6863,7 +6872,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.8 treats the structurally resolved Rockstar iControl state as authoritative and only uses the lightweight input fallback when that state is unavailable. The transition is delayed about five seconds after the confirmed sale.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.9 fixes the GTA V SWITCH case-target decoder and requires Rockstar's structurally resolved DO_STAGE_SELL iControl state; the input-count fallback is no longer used.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
