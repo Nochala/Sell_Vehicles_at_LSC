@@ -9,8 +9,6 @@ namespace SellCompletion
         bool shopActive,
         bool sellContextActive,
         int sellPrice,
-        int sellControlState,
-        bool acceptPressed,
-        bool cancelPressed);
+        int sellControlState);
     void Reset();
 }
