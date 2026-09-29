@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.14 Phase 3N dynamic vehicle pricing";
+static const char* kBuildTag = "v0.3.15 Phase 3N GTACars native pricing";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -4906,10 +4906,660 @@ static bool ResolvePhase3SellControlPath(
 
 static void UpdatePhase3SellControlStateFast();
 
+struct Phase3GtacarsPriceEntry
+{
+    uint32_t modelHash;
+    int purchasePrice;
+};
+
+// GTACars-derived native GTA 5/Online acquisition-price reference.
+// The table is keyed by the actual GTA model hash for O(log n) lookup.
+// Missing/newer models safely fall back to the dynamic class/model estimator.
+static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
+{
+    { 0x00675ED7U, 210000 }, // chimera
+    { 0x00ABB0C0U, 40000 }, // carbonrs
+    { 0x00E83C17U, 535000 }, // hermes
+    { 0x00FDFFB0U, 165000 }, // virgo3
+    { 0x0239E390U, 90000 }, // hotknife
+    { 0x0350D1ABU, 5000 }, // faggio2
+    { 0x03E5F6B8U, 16000 }, // youga
+    { 0x0409D787U, 700000 }, // yosemite3
+    { 0x047A6BC1U, 200000 }, // glendale
+    { 0x04CE68ACU, 35000 }, // dominator
+    { 0x04F48FC4U, 1175000 }, // rebla
+    { 0x05283265U, 95000 }, // bf400
+    { 0x05852838U, 51000 }, // kalahari
+    { 0x0612F4B6U, 550000 }, // trophytruck
+    { 0x067BC037U, 138000 }, // coquette
+    { 0x06FF6914U, 750000 }, // btype
+    { 0x097E5533U, 1150000 }, // ardent
+    { 0x09D80F93U, 1700000 }, // miljet
+    { 0x0A90ED5CU, 1225000 }, // phantom3
+    { 0x0BBA2261U, 904000 }, // elegy
+    { 0x0D4E5F4DU, 865000 }, // cheetah2
+    { 0x0D4EA603U, 490000 }, // sabregt2
+    { 0x0DC60D2BU, 325000 }, // speeder
+    { 0x0DF381E5U, 1595000 }, // reaper
+    { 0x0E2C013EU, 535000 }, // buffalo3
+    { 0x1044926FU, 1329000 }, // tempesta
+    { 0x1149422FU, 22000 }, // tropic
+    { 0x11962E49U, 3870000 }, // annihilator2
+    { 0x11AA0E14U, 864500 }, // gburrito2
+    { 0x11CBC051U, 192000 }, // verus
+    { 0x11F58A5AU, 670000 }, // stryder
+    { 0x11F76C14U, 15000 }, // hexer
+    { 0x127E90D5U, 450000 }, // dynasty
+    { 0x1324E960U, 1272000 }, // stafford
+    { 0x132D5A1AU, 225000 }, // crusader
+    { 0x13B57D8AU, 185000 }, // cogcabrio
+    { 0x142E0DC3U, 240000 }, // vacca
+    { 0x1446590AU, 3515000 }, // formula
+    { 0x149BD32AU, 18420500 }, // pbus2
+    { 0x14D22159U, 230000 }, // gauntlet2
+    { 0x14D69010U, 225000 }, // chino
+    { 0x1573422DU, 890000 }, // baller7
+    { 0x163F8520U, 13218750 }, // slamvan5
+    { 0x16E478C1U, 110000 }, // surano
+    { 0x171C92C4U, 1400000 }, // hauler2
+    { 0x17420102U, 225000 }, // cliffhanger
+    { 0x177DA45CU, 1470000 }, // jb7002
+    { 0x17DF5EC2U, 1966210 }, // squalo
+    { 0x185484E1U, 500000 }, // turismor
+    { 0x185E2FF3U, 1268000 }, // outlaw
+    { 0x18619B7EU, 580000 }, // kanjo
+    { 0x187D938DU, 6982500 }, // kuruma2
+    { 0x18F25AC7U, 440000 }, // infernus
+    { 0x196F9418U, 1775000 }, // dominator7
+    { 0x19DD9ED1U, 1245000 }, // nightshark
+    { 0x1A79847AU, 598500 }, // boxville4
+    { 0x1A861243U, 22849400 }, // imperator
+    { 0x1AAD0DEDU, 3724000 }, // volatol
+    { 0x1ABA13B5U, 8000 }, // cruiser
+    { 0x1B8165D3U, 1650000 }, // jubilee
+    { 0x1BB290BCU, 30000 }, // tornado
+    { 0x1BF8D381U, 865000 }, // lguard
+    { 0x1C09CF5EU, 374000 }, // baller5
+    { 0x1CBDC10BU, 1735000 }, // lynx
+    { 0x1D06D681U, 195000 }, // huntley
+    { 0x1DC0BA53U, 36000 }, // fusilade
+    { 0x1DD4C0FFU, 909000 }, // swinger
+    { 0x1F3766E3U, 55000 }, // voodoo2
+    { 0x1F52A43FU, 325000 }, // moonbeam
+    { 0x20314B42U, 21386400 }, // zr380
+    { 0x206D1B68U, 100000 }, // khamelion
+    { 0x2189D250U, 30922500 }, // apc
+    { 0x2290C50AU, 1260000 }, // warrener2
+    { 0x23CA25F2U, 625000 }, // hustler
+    { 0x250B0C5EU, 1625000 }, // luxor
+    { 0x2560B2FCU, 45000 }, // romero
+    { 0x25676EAFU, 135000 }, // fcr
+    { 0x256E92BAU, 1089000 }, // issi4
+    { 0x258C9364U, 1580000 }, // astron
+    { 0x25C5AF13U, 565000 }, // banshee2
+    { 0x25CBE2E2U, 247000 }, // baller4
+    { 0x26321E67U, 9975000 }, // lectro
+    { 0x2714AA93U, 2820000 }, // zeno
+    { 0x276D98A3U, 1145000 }, // comet5
+    { 0x27816B7EU, 1720000 }, // iwagen
+    { 0x27B4E6B0U, 513000 }, // baller6
+    { 0x27D79225U, 1609000 }, // bruiser
+    { 0x287FA449U, 38703000 }, // cerberus2
+    { 0x28AD20E1U, 2926000 }, // boxville5
+    { 0x28B67ACAU, 250000 }, // contender
+    { 0x28EAB80FU, 718000 }, // drafter
+    { 0x29B0DA97U, 11000 }, // surfer
+    { 0x29FCD3E4U, 396000 }, // cog552
+    { 0x2A54C47DU, 2113000 }, // supervolito
+    { 0x2AE524A8U, 430000 }, // ruston
+    { 0x2B0C4DCDU, 615000 }, // gauntlet3
+    { 0x2B26F456U, 62000 }, // dukes
+    { 0x2B7F9DE3U, 495000 }, // slamvan
+    { 0x2BE8B90AU, 1220000 }, // dominator8
+    { 0x2BEC3CBEU, 96000 }, // buffalo2
+    { 0x2C1FEA99U, 2214000 }, // vagrant
+    { 0x2C2C2324U, 120000 }, // gargoyle
+    { 0x2C509634U, 90000 }, // sovereign
+    { 0x2C634FBDU, 1300000 }, // frogger
+    { 0x2D3BD401U, 950000 }, // ztype
+    { 0x2DB8D1AAU, 150000 }, // alpha
+    { 0x2EA68690U, 1500000 }, // rhino
+    { 0x2EC385FEU, 695000 }, // coquette3
+    { 0x2EF89E46U, 7000 }, // sanchez
+    { 0x2F03547BU, 1750000 }, // buzzard
+    { 0x30D3F6D8U, 1995000 }, // sheava
+    { 0x30FF0190U, 412000 }, // defiler
+    { 0x31F0B376U, 1825000 }, // annihilator
+    { 0x3201DD49U, 900000 }, // z190
+    { 0x32174AFCU, 15308750 }, // monster4
+    { 0x322CF98FU, 140000 }, // rhapsody
+    { 0x32B29A4BU, 27000 }, // bjxl
+    { 0x33581161U, 299000 }, // jetmax
+    { 0x33B98FE2U, 1420000 }, // pariah
+    { 0x3404691CU, 1718000 }, // sultan2
+    { 0x3412AE2DU, 95000 }, // sentinel2
+    { 0x34B7390FU, 42000 }, // habanero
+    { 0x34B82784U, 35245000 }, // oppressor
+    { 0x34DBA661U, 31853500 }, // stromberg
+    { 0x34DD8AA1U, 16000 }, // intruder
+    { 0x35DED0DDU, 990000 }, // savestra
+    { 0x360A438EU, 154000 }, // cog55
+    { 0x36A167E0U, 925000 }, // rrocket
+    { 0x36B4A8A9U, 2375000 }, // xa21
+    { 0x378236E1U, 360000 }, // issi3
+    { 0x381E10BDU, 57456000 }, // ruiner2
+    { 0x3822BDFEU, 9044000 }, // casco
+    { 0x3944D5A0U, 2740000 }, // furia
+    { 0x39D6779EU, 275000 }, // duster
+    { 0x39D6E83FU, 3990000 }, // hydra
+    { 0x39DA2754U, 12000 }, // sultan
+    { 0x39F9C898U, 375000 }, // tampa
+    { 0x3ADB9758U, 1224000 }, // sugoi
+    { 0x3AF76F4AU, 38304000 }, // voltic2
+    { 0x3AF8C345U, 38000 }, // sandking2
+    { 0x3C26BD0CU, 12095000 }, // impaler2
+    { 0x3C4E2113U, 665000 }, // coquette2
+    { 0x3D29CD2BU, 195000 }, // youga2
+    { 0x3D7C6410U, 2825000 }, // tezeract
+    { 0x3D8FA25CU, 120000 }, // ninef
+    { 0x3DA47243U, 1440000 }, // nero
+    { 0x3DC92356U, 26533500 }, // nokota
+    { 0x3DEE5EDAU, 42000 }, // blista2
+    { 0x3E2E4F8AU, 51737000 }, // tula
+    { 0x3E3D1F59U, 2325000 }, // thrax
+    { 0x3E5BD8D9U, 1225000 }, // michelli
+    { 0x3EAB5555U, 350000 }, // jb700
+    { 0x3FC5D440U, 23000 }, // bobcatxl
+    { 0x3FD5AA2FU, 1750000 }, // toro
+    { 0x400F5147U, 252000 }, // specter2
+    { 0x4019CB4CU, 5150000 }, // swift2
+    { 0x403820E8U, 13233500 }, // velum2
+    { 0x404B6381U, 400000 }, // pigalle
+    { 0x40C332A3U, 225000 }, // manchez2
+    { 0x4131F378U, 605000 }, // nero2
+    { 0x41B77FA4U, 695000 }, // verlierer2
+    { 0x41D149AAU, 650000 }, // sentinel3
+    { 0x4201A843U, 620000 }, // peyote3
+    { 0x42836BE5U, 830000 }, // hotring
+    { 0x42ACA95FU, 408000 }, // asbo
+    { 0x42BC5E19U, 415000 }, // slamvan3
+    { 0x42F2ED16U, 250000 }, // superd
+    { 0x432AA566U, 16000 }, // bfinjection
+    { 0x4339CD69U, 10000 }, // tribike
+    { 0x43779C54U, 8000 }, // bmx
+    { 0x440851D8U, 1797000 }, // comet7
+    { 0x4543B74DU, 13000 }, // rumpo
+    { 0x4662BCBBU, 14896000 }, // technical2
+    { 0x46699F47U, 37040500 }, // akula
+    { 0x4669D038U, 2997000 }, // openwheel2
+    { 0x47BBCF2EU, 253000 }, // xls
+    { 0x48CECED3U, 30000 }, // seminole
+    { 0x494752F7U, 1815000 }, // seasparrow2
+    { 0x49863E9CU, 500000 }, // marshall
+    { 0x4992196CU, 1260000 }, // gp1
+    { 0x49E25BA1U, 1089000 }, // issi6
+    { 0x4ABEBF23U, 1775000 }, // caracara
+    { 0x4B6C568AU, 82000 }, // hakuchou
+    { 0x4BA4E8DCU, 58000 }, // landstalker
+    { 0x4BFCF28BU, 610000 }, // bestiagts
+    { 0x4C3FFF49U, 512000 }, // deviant
+    { 0x4C80EB0EU, 550000 }, // airbus
+    { 0x4C8DBA51U, 2400000 }, // zhaba
+    { 0x4DC079D7U, 1627000 }, // growler
+    { 0x4EE74355U, 2750000 }, // emerus
+    { 0x4FAF0D70U, 2200000 }, // kosatka
+    { 0x4FB1A214U, 60000 }, // serrano
+    { 0x4FF77E37U, 950000 }, // vestra
+    { 0x506434F6U, 82000 }, // oracle
+    { 0x50732C82U, 60000 }, // sentinel
+    { 0x5097F589U, 1603000 }, // sc1
+    { 0x50A6FB9CU, 24805000 }, // shinobi
+    { 0x50D4D19FU, 1425000 }, // technical3
+    { 0x51D83328U, 120000 }, // warrener
+    { 0x5216AD5EU, 1370000 }, // remus
+    { 0x52FF9437U, 1890000 }, // cyclone
+    { 0x546DA331U, 1490000 }, // previon
+    { 0x5502626CU, 1750000 }, // fmj
+    { 0x55365079U, 610000 }, // brioso2
+    { 0x56C8A5EFU, 3660000 }, // toreador
+    { 0x56CDEE7DU, 1285000 }, // vstr
+    { 0x56D42971U, 718000 }, // tulip
+    { 0x57F682AFU, 130000 }, // rumpo3
+    { 0x586765FBU, 47215000 }, // deluxo
+    { 0x58B3979CU, 25000 }, // paradise
+    { 0x58CDAF30U, 36575000 }, // thruster
+    { 0x58CF185CU, 208000 }, // schafter4
+    { 0x58E316C7U, 1995000 }, // sanctus
+    { 0x58F77553U, 3400000 }, // openwheel1
+    { 0x5993F939U, 1225000 }, // trailerlarge
+    { 0x59A9E570U, 998000 }, // torero
+    { 0x59E0FBF3U, 9000 }, // picador
+    { 0x5B531351U, 1845000 }, // deity
+    { 0x5BA0FF1EU, 1089000 }, // issi5
+    { 0x5BEB3CE0U, 30762900 }, // scarab2
+    { 0x5C23AF9BU, 850000 }, // stinger
+    { 0x5C55CB39U, 155000 }, // brioso
+    { 0x5D1903F9U, 710000 }, // comet4
+    { 0x5D56F01BU, 4788000 }, // molotok
+    { 0x5E4327C8U, 845000 }, // windsor
+    { 0x5EE005DAU, 1795000 }, // deveste
+    { 0x6068AD86U, 335000 }, // fagaloa
+    { 0x619C1B82U, 22849400 }, // imperator2
+    { 0x61FE4D6AU, 870000 }, // weevil
+    { 0x6210CBB0U, 9000 }, // rancherxl
+    { 0x6290F15BU, 3205300 }, // pounder2
+    { 0x6322B39AU, 2200000 }, // t20
+    { 0x63ABADE7U, 9000 }, // akuma
+    { 0x64DE07A1U, 3800000 }, // strikeforce
+    { 0x64F49967U, 1308000 }, // yosemite2
+    { 0x665F785DU, 925000 }, // manana2
+    { 0x669EB40AU, 15308750 }, // monster3
+    { 0x66B4FC45U, 10000 }, // stratum
+    { 0x67D2B389U, 500000 }, // streiter
+    { 0x67D52852U, 13218750 }, // slamvan6
+    { 0x6827CF72U, 2240000 }, // stockade
+    { 0x6882FA73U, 48000 }, // enduro
+    { 0x68A5D1EFU, 1550000 }, // cypher
+    { 0x69F06B57U, 15000 }, // washington
+    { 0x6ABDF65EU, 245000 }, // diablous2
+    { 0x6B73A9BEU, 1288000 }, // youga3
+    { 0x6CBD1D6DU, 1150000 }, // besra
+    { 0x6D19CCBCU, 38000 }, // peyote
+    { 0x6D6F8F43U, 75000 }, // thrust
+    { 0x6DBD6C0AU, 615000 }, // retinue
+    { 0x6E8DA4F7U, 897000 }, // issi7
+    { 0x6EF89CCCU, 2125000 }, // longfin
+    { 0x6F039A67U, 812000 }, // zion3
+    { 0x6F946279U, 485000 }, // yosemite
+    { 0x6FACDF31U, 48000 }, // ratbike
+    { 0x6FF0F727U, 149000 }, // baller3
+    { 0x706E2B40U, 599000 }, // specter
+    { 0x707E63A4U, 816000 }, // tropos
+    { 0x710A2B9BU, 370000 }, // moonbeam2
+    { 0x711D4738U, 11305000 }, // dune3
+    { 0x71CB2FFBU, 24000 }, // fugitive
+    { 0x71CBEA98U, 940000 }, // gb200
+    { 0x71D3B6F0U, 38703000 }, // cerberus3
+    { 0x72934BE4U, 438000 }, // schafter6
+    { 0x72A4C31EU, 71000 }, // stalion
+    { 0x734C5E50U, 745000 }, // gauntlet4
+    { 0x73920F8EU, 3295000 }, // firetruk
+    { 0x7397224CU, 1535000 }, // vagner
+    { 0x73F4110EU, 957600 }, // mule4
+    { 0x761E2AD3U, 2000000 }, // titan
+    { 0x767164D6U, 1950000 }, // osiris
+    { 0x76D7C404U, 1900000 }, // reever
+    { 0x779B4F2DU, 420000 }, // voodoo
+    { 0x779F23AAU, 60000 }, // cavalcade
+    { 0x780FFBD2U, 1630000 }, // vetir
+    { 0x7836CE2FU, 9000 }, // futo
+    { 0x79178F0AU, 1620000 }, // retinue2
+    { 0x794CB30CU, 264000 }, // esskey
+    { 0x7980BDD5U, 1800000 }, // euros
+    { 0x798682A2U, 26666500 }, // brutus3
+    { 0x79DD18AEU, 1775000 }, // menacer
+    { 0x7A2EF5E4U, 885000 }, // rapidgt3
+    { 0x7B406EFBU, 2550000 }, // tyrus
+    { 0x7B47A6A7U, 650000 }, // lurcher
+    { 0x7B54A9D3U, 38902500 }, // oppressor2
+    { 0x7B7E56F0U, 8977500 }, // insurgent2
+    { 0x7B8AB45FU, 195000 }, // carbonizzare
+    { 0x7E8F677FU, 2700000 }, // prototipo
+    { 0x7F3415E3U, 378000 }, // dukes3
+    { 0x7F5C91F1U, 85000 }, // rocoto
+    { 0x7F81A829U, 26666500 }, // brutus
+    { 0x806B9CC3U, 16000 }, // bagger
+    { 0x810369E2U, 1000000 }, // dump
+    { 0x8125BCF9U, 8000 }, // blazer
+    { 0x81634188U, 10000 }, // manana
+    { 0x81794C70U, 250000 }, // stunt
+    { 0x817AFAADU, 815000 }, // gauntlet5
+    { 0x8198AEDCU, 2305000 }, // entity2
+    { 0x81A9CDDFU, 36000 }, // faction
+    { 0x81BD2ED0U, 3450000 }, // avenger
+    { 0x81E38F7FU, 116000 }, // avarus
+    { 0x825A9F4CU, 375000 }, // guardian
+    { 0x829A3C44U, 1385000 }, // rallytruck
+    { 0x82CAC433U, 1250000 }, // tug
+    { 0x82E47E85U, 1280000 }, // club
+    { 0x82E499FAU, 875000 }, // stingergt
+    { 0x83051506U, 12635000 }, // technical
+    { 0x83070B62U, 3318350 }, // impaler
+    { 0x8408F33AU, 785000 }, // gt500
+    { 0x84718D34U, 525000 }, // coach
+    { 0x8526E2F5U, 13218750 }, // slamvan4
+    { 0x85E8E76BU, 1189000 }, // italigtb
+    { 0x8612B64BU, 22000 }, // rebel2
+    { 0x8644331AU, 1609000 }, // bruiser3
+    { 0x86618EDAU, 400000 }, // primo2
+    { 0x866BCE26U, 695000 }, // faction3
+    { 0x86FE0B60U, 254000 }, // cognoscenti
+    { 0x877358ADU, 645000 }, // comet3
+    { 0x885F3671U, 7315000 }, // pbus
+    { 0x8911B9F5U, 145000 }, // feltzer2
+    { 0x897AFC65U, 1375000 }, // terbyte
+    { 0x89BA59F5U, 23009000 }, // havok
+    { 0x8B13F083U, 30000 }, // stretch
+    { 0x8B213907U, 3115000 }, // formula2
+    { 0x8C2BD0DCU, 585000 }, // nightshade
+    { 0x8CB29A14U, 132000 }, // rapidgt
+    { 0x8CF5CAE1U, 900000 }, // windsor2
+    { 0x8D45DF49U, 12095000 }, // impaler3
+    { 0x8D4B7A8AU, 2025000 }, // insurgent3
+    { 0x8E08EC82U, 6583500 }, // wastelander
+    { 0x8E9254FBU, 26000 }, // asterope
+    { 0x8F0E3594U, 38000 }, // surge
+    { 0x8F49AE28U, 26666500 }, // brutus2
+    { 0x8FB66F9BU, 10000 }, // premier
+    { 0x8FD54EBBU, 1862000 }, // trailersmall2
+    { 0x9114EADAU, 17955000 }, // insurgent
+    { 0x91373058U, 1615000 }, // zr350
+    { 0x91CA96EEU, 1500000 }, // neon
+    { 0x920016F1U, 2295000 }, // volatus
+    { 0x9229E4EBU, 475000 }, // faggio
+    { 0x92EF6E04U, 1135000 }, // pfister811
+    { 0x92F5024EU, 608000 }, // novak
+    { 0x93F09558U, 1269000 }, // deathbike2
+    { 0x94114926U, 678000 }, // seminole2
+    { 0x94204D89U, 12000 }, // asea
+    { 0x9472CD24U, 805000 }, // peyote2
+    { 0x94B395C5U, 32000 }, // gauntlet
+    { 0x94DA98EFU, 375000 }, // tornado5
+    { 0x95466BDBU, 335000 }, // faction2
+    { 0x9628879CU, 35000 }, // granger
+    { 0x96E24857U, 665000 }, // microlight
+    { 0x9734F3EAU, 880000 }, // penetrator
+    { 0x97398A4BU, 695000 }, // seven70
+    { 0x97553C28U, 1475000 }, // everon
+    { 0x97E55D11U, 300000 }, // mammatus
+    { 0x9804F4C7U, 12095000 }, // impaler4
+    { 0x98F65A5EU, 1510000 }, // coquette4
+    { 0x991EFC04U, 1878000 }, // comet6
+    { 0x9A474B5EU, 1545000 }, // avisa
+    { 0x9A9EB7DEU, 36575000 }, // starling
+    { 0x9AE6DDA1U, 155000 }, // bullet
+    { 0x9B065C9EU, 1609000 }, // bruiser2
+    { 0x9B16A3B4U, 31255000 }, // riot2
+    { 0x9B909C94U, 15000 }, // sabregt
+    { 0x9C429B6AU, 450000 }, // velum
+    { 0x9C5E5644U, 3330000 }, // supervolito2
+    { 0x9C669788U, 12000 }, // double
+    { 0x9CF21E0FU, 20000 }, // dune
+    { 0x9CFFFC56U, 995000 }, // mamba
+    { 0x9D0450CAU, 780000 }, // maverick
+    { 0x9D96B45BU, 32000 }, // radi
+    { 0x9DAE1398U, 25536000 }, // phantom2
+    { 0x9F4B77BEU, 150000 }, // voltic
+    { 0x9F6ED5A2U, 1875000 }, // neo
+    { 0xA0438767U, 100000 }, // nightblade
+    { 0xA09E15FDU, 37905000 }, // valkyrie
+    { 0xA1355F67U, 17556000 }, // blazer5
+    { 0xA1B3A871U, 1970000 }, // jester4
+    { 0xA29D6D10U, 975000 }, // feltzer3
+    { 0xA29F78B0U, 909000 }, // clique
+    { 0xA31CB573U, 378000 }, // tornado6
+    { 0xA3FC0F4DU, 29000 }, // gresley
+    { 0xA42FC3A5U, 1785000 }, // vectre
+    { 0xA4A4E453U, 380000 }, // riata
+    { 0xA4D99B7DU, 1375000 }, // raiden
+    { 0xA4F52C13U, 1740000 }, // cinquemila
+    { 0xA52F6866U, 21213500 }, // alphaz1
+    { 0xA5325278U, 67000 }, // manchez
+    { 0xA6297CC8U, 1590000 }, // futo2
+    { 0xA703E4A9U, 995000 }, // veto2
+    { 0xA774B5A6U, 116000 }, // schafter3
+    { 0xA7CE1BC5U, 715000 }, // brawler
+    { 0xA7DCC35CU, 21386400 }, // zr3803
+    { 0xA7EDE74DU, 10000 }, // stanier
+    { 0xA8E38B01U, 130000 }, // ninef2
+    { 0xA960B13EU, 8000 }, // sanchez2
+    { 0xA988D3A2U, 25000 }, // prairie
+    { 0xA9EC907BU, 2765000 }, // ignus
+    { 0xAA699BB6U, 25000 }, // bodhi2
+    { 0xAA6F980AU, 38503500 }, // khanjali
+    { 0xAC33179CU, 915000 }, // infernus2
+    { 0xAC4E93C9U, 145000 }, // daemon2
+    { 0xAC5DF515U, 725000 }, // zentorno
+    { 0xAD6065C0U, 44555000 }, // pyro
+    { 0xAE0A3D4FU, 1132000 }, // dominator5
+    { 0xAE12C99CU, 1269000 }, // deathbike3
+    { 0xAE2BFE94U, 1263500 }, // kuruma
+    { 0xAED64A63U, 180000 }, // chino2
+    { 0xAF0B8D48U, 2310000 }, // tigon
+    { 0xAF599F01U, 630000 }, // vindicator
+    { 0xAF966F3CU, 875000 }, // caracara2
+    { 0xB1D95DA0U, 650000 }, // cheetah
+    { 0xB2A716A3U, 240000 }, // jester
+    { 0xB2CF7250U, 1900000 }, // nimbus
+    { 0xB2E046FBU, 1132000 }, // dominator6
+    { 0xB2FE5CF9U, 795000 }, // entityxf
+    { 0xB3206692U, 9000 }, // ingot
+    { 0xB328B188U, 55000 }, // faggio3
+    { 0xB39B0AE6U, 6500000 }, // lazer
+    { 0xB44F0582U, 69000 }, // blazer3
+    { 0xB472D2B5U, 565000 }, // ellie
+    { 0xB4F32118U, 1675000 }, // flashgt
+    { 0xB52B5113U, 65000 }, // schafter2
+    { 0xB53C6C52U, 2275000 }, // minitank
+    { 0xB5D306A4U, 1495000 }, // tailgater2
+    { 0xB5EF4C33U, 3750000 }, // vigilante
+    { 0xB6410173U, 249000 }, // dubsta3
+    { 0xB67597ECU, 10000 }, // tribike2
+    { 0xB6846A55U, 2475000 }, // le7b
+    { 0xB779A091U, 1000000 }, // adder
+    { 0xB79C1BF5U, 1150000 }, // shamal
+    { 0xB79F589EU, 10000000 }, // luxor2
+    { 0xB7D9F7F1U, 21080500 }, // tampa3
+    { 0xB802DD46U, 3000 }, // rebel
+    { 0xB820ED5EU, 160000 }, // blade
+    { 0xB8D657ADU, 1995000 }, // calico
+    { 0xB8E2AE18U, 65000 }, // zion2
+    { 0xB9210FD0U, 45000 }, // sandking
+    { 0xB9CB3B69U, 18000 }, // issi2
+    { 0xBA5334ACU, 498000 }, // toros
+    { 0xBB6B404FU, 9000 }, // primo
+    { 0xBB78956AU, 3465000 }, // italirsx
+    { 0xBBA2A2F7U, 30762900 }, // scarab
+    { 0xBC32A33BU, 50000 }, // fq2
+    { 0xBC5DC07EU, 1980000 }, // taipan
+    { 0xBC7C0A00U, 2165000 }, // imorgon
+    { 0xBC993509U, 25000 }, // dilettante
+    { 0xBCDE91F0U, 330000 }, // minivan2
+    { 0xBD1B39C3U, 60000 }, // zion
+    { 0xBE0E6126U, 350000 }, // jester2
+    { 0xBE11EFC6U, 21386400 }, // zr3802
+    { 0xBE819C63U, 30000 }, // rentalbus
+    { 0xBF1691E0U, 448000 }, // furoregt
+    { 0xC0240885U, 995000 }, // tampa2
+    { 0xC07107EEU, 1325000 }, // submersible2
+    { 0xC1A8A914U, 1310000 }, // slamtruck
+    { 0xC1AE4D16U, 100000 }, // comet2
+    { 0xC1CE1183U, 4139900 }, // marquis
+    { 0xC1E908D2U, 126000 }, // banshee
+    { 0xC2974024U, 168990 }, // seashark
+    { 0xC397F748U, 390000 }, // buccaneer2
+    { 0xC3D7C72BU, 99000 }, // zombiea
+    { 0xC3DDFDCEU, 55000 }, // tailgater
+    { 0xC3F25753U, 12967500 }, // howard
+    { 0xC4810400U, 2250000 }, // visione
+    { 0xC514AAE0U, 145000 }, // cheburek
+    { 0xC52C6B93U, 725000 }, // dominator3
+    { 0xC575DF11U, 705000 }, // turismo2
+    { 0xC58DA34AU, 1850000 }, // dinghy5
+    { 0xC5DD6967U, 1596000 }, // rogue
+    { 0xC7E55211U, 1625000 }, // locust
+    { 0xC96B73D9U, 315000 }, // dominator2
+    { 0xC972A155U, 2995000 }, // champion
+    { 0xC98BBAD6U, 520000 }, // glendale2
+    { 0xC9CEAF06U, 9000 }, // pcj
+    { 0xC9E8FF76U, 5985000 }, // burrito2
+    { 0xCA495705U, 500000 }, // dodo
+    { 0xCA62927AU, 240000 }, // virgo2
+    { 0xCABD11E8U, 9000 }, // ruffian
+    { 0xCADD5D2DU, 15000 }, // bati2
+    { 0xCB0E7CD9U, 325000 }, // schafter5
+    { 0xCB642637U, 797000 }, // nebula
+    { 0xCCE5C8FAU, 895000 }, // veto
+    { 0xCD93A7DBU, 7420140 }, // monster
+    { 0xCE0B9F22U, 1220000 }, // landstalker2
+    { 0xCE44C4B9U, 1700000 }, // komoda
+    { 0xCE6B35A4U, 550000 }, // btype2
+    { 0xCEC6B9B7U, 21000 }, // vigero
+    { 0xCEEA3F4BU, 450000 }, // barracks
+    { 0xCFCFEB3BU, 50000 }, // patriot
+    { 0xD039510BU, 38703000 }, // cerberus
+    { 0xD1AD4937U, 701000 }, // omnis
+    { 0xD2D5E00EU, 196000 }, // fcr2
+    { 0xD2F77E37U, 22849400 }, // imperator3
+    { 0xD35698EFU, 31255000 }, // mogul
+    { 0xD37B7976U, 80000 }, // schwarzer
+    { 0xD4AE63D9U, 1815000 }, // seasparrow
+    { 0xD556917CU, 15308750 }, // monster5
+    { 0xD577C962U, 500000 }, // bus
+    { 0xD6BC7523U, 33117000 }, // chernobog
+    { 0xD6FB0F30U, 1132000 }, // dominator4
+    { 0xD756460CU, 29000 }, // buccaneer
+    { 0xD757D97DU, 1925000 }, // zorrusso
+    { 0xD7C56D39U, 648000 }, // raptor
+    { 0xD80F4A44U, 1710000 }, // patriot3
+    { 0xD83C13CEU, 6000 }, // ratloader
+    { 0xD86A0247U, 2875000 }, // krieger
+    { 0xD876DBE2U, 695000 }, // trophytruck2
+    { 0xD9927FE3U, 240000 }, // cuban800
+    { 0xD9F0503DU, 46284000 }, // scramjet
+    { 0xDA288376U, 12000 }, // nemesis
+    { 0xDA5819A3U, 385000 }, // massacro2
+    { 0xDA5EC7DAU, 1380000 }, // penumbra2
+    { 0xDAC67112U, 60000 }, // jackal
+    { 0xDB0C9B04U, 2150000 }, // buffalo4
+    { 0xDB20A373U, 95000 }, // wolfsbane
+    { 0xDBA9DBFCU, 356000 }, // vortex
+    { 0xDBF2D57AU, 558000 }, // cognoscenti2
+    { 0xDC19D101U, 982000 }, // btype3
+    { 0xDC434E51U, 35000 }, // sadler
+    { 0xDCBCBE48U, 80000 }, // f620
+    { 0xDCE1D9F7U, 375000 }, // ratloader2
+    { 0xDD71BFEBU, 30762900 }, // scarab3
+    { 0xDE05FB87U, 122000 }, // zombieb
+    { 0xDE3D9D22U, 95000 }, // elegy2
+    { 0xE18195B2U, 80000 }, // oracle2
+    { 0xE1C03AB0U, 1300000 }, // schlagen
+    { 0xE2504942U, 195000 }, // virgo
+    { 0xE33A477BU, 495000 }, // italigtb2
+    { 0xE505CF99U, 1715000 }, // rt3000
+    { 0xE550775BU, 905000 }, // paragon
+    { 0xE5BA6858U, 81000 }, // blazer4
+    { 0xE62B361BU, 490000 }, // monroe
+    { 0xE6401328U, 522000 }, // xls2
+    { 0xE644E480U, 85000 }, // panto
+    { 0xE6E967F8U, 6118000 }, // patriot2
+    { 0xE78CC3D9U, 1610000 }, // revolter
+    { 0xE7D2A16EU, 2225000 }, // shotaro
+    { 0xE80F67EEU, 277000 }, // stalion2
+    { 0xE823FB48U, 10000 }, // tribike3
+    { 0xE8983F9FU, 11305000 }, // seabreeze
+    { 0xE8A8BA94U, 875000 }, // viseris
+    { 0xE8A8BDA8U, 90000 }, // felon
+    { 0xE9805550U, 24000 }, // penumbra
+    { 0xE99011C2U, 2515000 }, // tyrant
+    { 0xEA313705U, 4350000 }, // alkonost
+    { 0xEA6A047FU, 835000 }, // hellion
+    { 0xEB298297U, 75000 }, // bifta
+    { 0xEBC24DF2U, 1600000 }, // swift
+    { 0xEC3E3404U, 1965000 }, // italigto
+    { 0xEC8F7094U, 665000 }, // dukes2
+    { 0xECA6B6A3U, 2575000 }, // s80
+    { 0xED552C74U, 1955000 }, // autarch
+    { 0xED62BFA9U, 3192000 }, // dune5
+    { 0xED7EADA4U, 30000 }, // minivan
+    { 0xEDA4ED97U, 11903500 }, // blimp3
+    { 0xEDC6F847U, 1100000 }, // brickade
+    { 0xEDD516C6U, 35000 }, // buffalo
+    { 0xEE6024BCU, 795000 }, // sultanrs
+    { 0xEEA75E63U, 1789000 }, // sultan3
+    { 0xEEF345ECU, 1590000 }, // rcbandito
+    { 0xEF2295C9U, 251600 }, // suntrap
+    { 0xEF813606U, 2955000 }, // patrolboat
+    { 0xF06C29C7U, 1380000 }, // granger2
+    { 0xF0C2A91FU, 976000 }, // hakuchou2
+    { 0xF1B44F44U, 169000 }, // diablous
+    { 0xF26CEFF9U, 10000 }, // ruiner
+    { 0xF330CB6AU, 790000 }, // jester3
+    { 0xF34DFB25U, 21213500 }, // barrage
+    { 0xF376F1E6U, 1100000 }, // winky
+    { 0xF38C4245U, 1225000 }, // jugular
+    { 0xF4E1AA15U, 2000 }, // scorcher
+    { 0xF683EACAU, 925000 }, // innovation
+    { 0xF77ADE32U, 275000 }, // massacro
+    { 0xF79A00F7U, 9000 }, // vader
+    { 0xF8C2E0E7U, 345000 }, // kamacho
+    { 0xF8D48E7AU, 15000 }, // journey
+    { 0xF92AEC4DU, 1650000 }, // limo2
+    { 0xF9300CC5U, 15000 }, // bati
+    { 0xF9E67C05U, 1130000 }, // squaddie
+    { 0xFAAD85EEU, 95000 }, // felon2
+    { 0xFB133A17U, 25935000 }, // savage
+    { 0xFCC2F483U, 597000 }, // freecrawler
+    { 0xFCFCB68BU, 1790000 }, // cargobob
+    { 0xFD128DFDU, 596000 }, // vamos
+    { 0xFD231729U, 62000 }, // blazer2
+    { 0xFD707EDEU, 4123000 }, // hunter
+    { 0xFE0A508CU, 59185000 }, // bombushka
+    { 0xFE141DA6U, 22543500 }, // halftrack
+    { 0xFE5F0722U, 1269000 }, // deathbike
+    { 0xFEFD644FU, 30000 }, // bison
+    { 0xFF22D208U, 8000 }, // regina
+    { 0xFFB15B5EU, 205000 }, // exemplar
+};
+
+static int GetPhase3GtacarsPurchasePrice(
+    Hash model)
+{
+    const uint32_t target =
+        static_cast<uint32_t>(model);
+
+    size_t low = 0;
+    size_t high =
+        sizeof(kPhase3GtacarsPrices)
+        / sizeof(kPhase3GtacarsPrices[0]);
+
+    while (low < high)
+    {
+        const size_t mid =
+            low + (high - low) / 2;
+
+        const uint32_t candidate =
+            kPhase3GtacarsPrices[mid]
+                .modelHash;
+
+        if (candidate < target)
+        {
+            low = mid + 1;
+        }
+        else
+        {
+            high = mid;
+        }
+    }
+
+    if (low
+            < sizeof(kPhase3GtacarsPrices)
+                / sizeof(kPhase3GtacarsPrices[0])
+        && kPhase3GtacarsPrices[low]
+            .modelHash == target)
+    {
+        return kPhase3GtacarsPrices[low]
+            .purchasePrice;
+    }
+
+    return 0;
+}
+
 struct Phase3VehiclePriceEstimate
 {
     int vehicleClass;
     int modelValue;
+    int gtacarsPurchasePrice;
     int classMarketFloor;
     int baseMarketValue;
     int customizationRetailValue;
@@ -5190,15 +5840,30 @@ static bool EstimatePhase3VehicleSellPrice(
     estimate.modelValue =
         GetPhase3VehicleModelValue(model);
 
+    estimate.gtacarsPurchasePrice =
+        GetPhase3GtacarsPurchasePrice(
+            model);
+
     estimate.classMarketFloor =
         GetPhase3ClassMarketFloor(
             estimate.vehicleClass);
 
-    estimate.baseMarketValue =
-        estimate.modelValue
-            > estimate.classMarketFloor
-        ? estimate.modelValue
-        : estimate.classMarketFloor;
+    if (estimate.gtacarsPurchasePrice > 0)
+    {
+        // For known native vehicles, GTACars acquisition pricing is the
+        // authoritative stock-value basis. Do not let nMonetaryValue drag
+        // expensive Online-era vehicles down to traffic-car prices.
+        estimate.baseMarketValue =
+            estimate.gtacarsPurchasePrice;
+    }
+    else
+    {
+        estimate.baseMarketValue =
+            estimate.modelValue
+                > estimate.classMarketFloor
+            ? estimate.modelValue
+            : estimate.classMarketFloor;
+    }
 
     estimate.customizationRetailValue =
         EstimatePhase3CustomizationRetailValue(
@@ -5384,7 +6049,7 @@ static void UpdatePhase3SellPriceFallback()
             finalPrice;
 
         Logf(
-            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d classFloor=%d baseMarket=%d customizationRetail=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
+            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d gtacarsPurchase=%d classFloor=%d baseMarket=%d customizationRetail=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
             static_cast<int>(vehicle),
             static_cast<unsigned int>(model),
             estimate.vehicleClass,
@@ -5392,6 +6057,7 @@ static void UpdatePhase3SellPriceFallback()
                 estimate.vehicleClass),
             static_cast<int>(rockstarPrice),
             estimate.modelValue,
+            estimate.gtacarsPurchasePrice,
             estimate.classMarketFloor,
             estimate.baseMarketValue,
             estimate.customizationRetailValue,
@@ -5403,7 +6069,9 @@ static void UpdatePhase3SellPriceFallback()
             rockstarPrice
                     > estimate.dynamicSellPrice
                 ? "rockstar"
-                : "dynamic");
+                : (estimate.gtacarsPurchasePrice > 0
+                    ? "gtacars"
+                    : "dynamic-fallback"));
 
         g_phase3FallbackLogged = true;
     }
@@ -7609,7 +8277,7 @@ static void LogStartupState()
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and dynamically estimates Story Mode resale value from vehicle class, GET_VEHICLE_MODEL_VALUE, and installed customization. It uses 60%% of the class-corrected base market value plus 50%% of estimated installed upgrade value, and only raises a positive Rockstar price when Rockstar's value is lower.");
+    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles, then applies the documented 60%% resale basis plus 50%% of estimated installed upgrade value. Missing/newer/add-on models fall back to the class/model estimator. A higher positive Rockstar price is never reduced.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, and credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes.");
