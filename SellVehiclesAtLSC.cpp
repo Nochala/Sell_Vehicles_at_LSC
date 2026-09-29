@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.10 Phase 3O exact Sell-state runtime";
+static const char* kBuildTag = "v0.3.11 Phase 3O Sell-stage gated runtime";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -536,6 +536,16 @@ struct Phase3SellControlPath
     uint32_t switchPosition;
 };
 
+struct Phase3SellStagePath
+{
+    bool resolved;
+    uint32_t staticIndex;
+    int sellMenuValue;
+    uint32_t switchPosition;
+    uint32_t sellCallPosition;
+    int functionIndex;
+};
+
 static Phase3SellPricePath g_phase3SellPricePath{};
 static Vehicle g_phase3FallbackVehicle = 0;
 static Hash g_phase3FallbackModel = 0;
@@ -544,8 +554,12 @@ static bool g_phase3FallbackLogged = false;
 static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
 static Phase3SellControlPath g_phase3SellControlPath{};
+static Phase3SellStagePath g_phase3SellStagePath{};
 static int g_phase3SellControlState = -1;
 static int g_phase3LastLoggedSellControlState = -999;
+static int g_phase3CurrentMenuState = -1;
+static int g_phase3LastLoggedMenuState = -999;
+static bool g_phase3SellStageActive = false;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -1697,8 +1711,12 @@ static void UpdatePhase2SellExposure()
             g_phase2NetworkGameNativeIndex = 0xFFFF;
             g_phase3SellPricePath = Phase3SellPricePath{};
             g_phase3SellControlPath = Phase3SellControlPath{};
+            g_phase3SellStagePath = Phase3SellStagePath{};
             g_phase3SellControlState = -1;
             g_phase3LastLoggedSellControlState = -999;
+            g_phase3CurrentMenuState = -1;
+            g_phase3LastLoggedMenuState = -999;
+            g_phase3SellStageActive = false;
             g_phase3PriceThreadInfo = Phase2ThreadInfo{};
             g_phase3PriceThreadCached = false;
             g_nextPhase3PriceUpdateAt = 0;
@@ -4316,6 +4334,290 @@ static bool Phase3RangeReferencesAnyString(
     return false;
 }
 
+static bool ResolvePhase3SellStagePath(
+    Phase2ScrProgram* program,
+    const std::vector<VmFunctionRange>& functions,
+    const VmFunctionRange& sellHandler)
+{
+    g_phase3SellStagePath =
+        Phase3SellStagePath{};
+
+    if (!program
+        || !sellHandler.found)
+    {
+        return false;
+    }
+
+    uint32_t resolvedStaticIndex = 0;
+    int resolvedSellMenuValue = -1;
+    uint32_t resolvedSwitch = 0;
+    uint32_t resolvedCall = 0;
+    int resolvedFunctionIndex = -1;
+    int qualifiedCount = 0;
+
+    for (size_t functionIndex = 0;
+         functionIndex < functions.size();
+         ++functionIndex)
+    {
+        const VmFunctionRange& function =
+            functions[functionIndex];
+
+        std::vector<Phase3DirectCall> calls;
+        if (!CollectDirectCalls(
+                program,
+                function,
+                functions,
+                calls))
+        {
+            return false;
+        }
+
+        for (size_t callIndex = 0;
+             callIndex < calls.size();
+             ++callIndex)
+        {
+            const Phase3DirectCall& call =
+                calls[callIndex];
+
+            if (call.target != sellHandler.start)
+                continue;
+
+            std::vector<uint32_t> instructionPositions;
+            for (uint32_t position = function.start;
+                 position < function.end;)
+            {
+                uint32_t length = 0;
+                if (!GetVmInstructionLength(
+                        program,
+                        position,
+                        length))
+                {
+                    return false;
+                }
+
+                instructionPositions.push_back(
+                    position);
+                position += length;
+            }
+
+            for (size_t instructionIndex = 0;
+                 instructionIndex
+                    < instructionPositions.size();
+                 ++instructionIndex)
+            {
+                const uint32_t switchPosition =
+                    instructionPositions[
+                        instructionIndex];
+
+                unsigned char* op =
+                    ScriptCodePointer(
+                        program,
+                        switchPosition);
+
+                if (!op || *op != kVmSwitch)
+                    continue;
+
+                unsigned char* countPtr =
+                    ScriptCodePointer(
+                        program,
+                        switchPosition + 1);
+
+                if (!countPtr)
+                    continue;
+
+                const uint32_t caseCount =
+                    static_cast<uint32_t>(
+                        *countPtr);
+
+                // The main carmod menu dispatch has many cases. Requiring a
+                // reasonably large switch prevents a nested state machine from
+                // being mistaken for the eMenu dispatcher.
+                if (caseCount < 16)
+                    continue;
+
+                struct MenuCase
+                {
+                    int value;
+                    uint32_t target;
+                };
+
+                std::vector<MenuCase> cases;
+                cases.reserve(caseCount);
+
+                bool validSwitch = true;
+
+                for (uint32_t entry = 0;
+                     entry < caseCount;
+                     ++entry)
+                {
+                    const uint32_t entryPosition =
+                        switchPosition + 2
+                        + entry * 6;
+
+                    uint32_t caseValueRaw = 0;
+                    uint32_t relativeRaw = 0;
+
+                    if (!ReadScriptUnsigned(
+                            program,
+                            entryPosition,
+                            4,
+                            caseValueRaw)
+                        || !ReadScriptUnsigned(
+                            program,
+                            entryPosition + 4,
+                            2,
+                            relativeRaw))
+                    {
+                        validSwitch = false;
+                        break;
+                    }
+
+                    const int16_t relative =
+                        static_cast<int16_t>(
+                            relativeRaw & 0xFFFFU);
+
+                    const int64_t target64 =
+                        static_cast<int64_t>(
+                            entryPosition)
+                        + 6
+                        + static_cast<int64_t>(
+                            relative);
+
+                    if (target64
+                            < static_cast<int64_t>(
+                                function.start)
+                        || target64
+                            >= static_cast<int64_t>(
+                                function.end))
+                    {
+                        validSwitch = false;
+                        break;
+                    }
+
+                    MenuCase menuCase{};
+                    menuCase.value =
+                        static_cast<int32_t>(
+                            caseValueRaw);
+                    menuCase.target =
+                        static_cast<uint32_t>(
+                            target64);
+                    cases.push_back(menuCase);
+                }
+
+                if (!validSwitch
+                    || cases.empty())
+                {
+                    continue;
+                }
+
+                for (size_t i = 0;
+                     i < cases.size();
+                     ++i)
+                {
+                    uint32_t blockEnd =
+                        function.end;
+
+                    for (size_t j = 0;
+                         j < cases.size();
+                         ++j)
+                    {
+                        if (cases[j].target
+                                > cases[i].target
+                            && cases[j].target
+                                < blockEnd)
+                        {
+                            blockEnd =
+                                cases[j].target;
+                        }
+                    }
+
+                    if (call.callPosition
+                            < cases[i].target
+                        || call.callPosition
+                            >= blockEnd)
+                    {
+                        continue;
+                    }
+
+                    // DO_STAGE_SELL is dispatched directly from CMM_SELL.
+                    // The call should be very near the case entry; this also
+                    // prevents an outer switch from accidentally qualifying.
+                    if (call.callPosition
+                            - cases[i].target
+                        > 32U)
+                    {
+                        continue;
+                    }
+
+                    uint32_t staticIndex = 0;
+                    if (!TryGetPhase3SwitchStaticIndex(
+                            program,
+                            instructionPositions,
+                            instructionIndex,
+                            staticIndex))
+                    {
+                        continue;
+                    }
+
+                    ++qualifiedCount;
+                    resolvedStaticIndex =
+                        staticIndex;
+                    resolvedSellMenuValue =
+                        cases[i].value;
+                    resolvedSwitch =
+                        switchPosition;
+                    resolvedCall =
+                        call.callPosition;
+                    resolvedFunctionIndex =
+                        function.index;
+
+                    Logf(
+                        "[Phase3P] SellStage qualified func=%d switch=0x%X staticIndex=%u sellMenuValue=%d sellCall=0x%X cases=%u",
+                        function.index,
+                        switchPosition,
+                        static_cast<unsigned int>(
+                            staticIndex),
+                        cases[i].value,
+                        call.callPosition,
+                        static_cast<unsigned int>(
+                            caseCount));
+                }
+            }
+        }
+    }
+
+    if (qualifiedCount != 1)
+    {
+        Logf(
+            "[Phase3P] SellStage unresolved qualified=%d",
+            qualifiedCount);
+        return false;
+    }
+
+    g_phase3SellStagePath.resolved = true;
+    g_phase3SellStagePath.staticIndex =
+        resolvedStaticIndex;
+    g_phase3SellStagePath.sellMenuValue =
+        resolvedSellMenuValue;
+    g_phase3SellStagePath.switchPosition =
+        resolvedSwitch;
+    g_phase3SellStagePath.sellCallPosition =
+        resolvedCall;
+    g_phase3SellStagePath.functionIndex =
+        resolvedFunctionIndex;
+
+    Logf(
+        "[Phase3P] SellStage resolved staticIndex=%u sellMenuValue=%d switch=0x%X sellCall=0x%X func=%d",
+        static_cast<unsigned int>(
+            resolvedStaticIndex),
+        resolvedSellMenuValue,
+        resolvedSwitch,
+        resolvedCall,
+        resolvedFunctionIndex);
+
+    return true;
+}
+
 static bool ResolvePhase3SellControlPath(
     Phase2ScrProgram* program,
     const VmFunctionRange& sellHandler)
@@ -4602,207 +4904,141 @@ static bool ResolvePhase3SellControlPath(
     return true;
 }
 
-static void UpdatePhase3SellPriceFallback()
+static void UpdatePhase3SellControlStateFast()
 {
+    g_phase3SellStageActive = false;
+
     if (!g_phase3Enabled
-        || !g_phase3SellPricePath.resolved
         || !g_carmodShopActive
-        || g_lastNetworkGame)
+        || g_lastNetworkGame
+        || !g_phase3SellStagePath.resolved
+        || !g_phase3SellControlPath.resolved
+        || !g_phase3PriceThreadCached
+        || !g_phase3PriceThreadInfo.stack)
     {
-        g_phase3SellContextActive = false;
-        g_phase3SellContextPrice = 0;
+        g_phase3CurrentMenuState = -1;
         g_phase3SellControlState = -1;
-
-        if (!g_carmodShopActive)
-        {
-            g_phase3PriceThreadInfo = Phase2ThreadInfo{};
-            g_phase3PriceThreadCached = false;
-            g_nextPhase3PriceUpdateAt = 0;
-        }
-
         return;
     }
 
-    const ULONGLONG now = GetTickCount64();
-    if (now < g_nextPhase3PriceUpdateAt)
-        return;
+    const uint32_t menuIndex =
+        g_phase3SellStagePath.staticIndex;
+    const uint32_t controlIndex =
+        g_phase3SellControlPath.staticIndex;
 
-    g_nextPhase3PriceUpdateAt =
-        now + kPhase3PriceUpdateIntervalMs;
-
-    g_phase3SellContextActive = false;
-    g_phase3SellContextPrice = 0;
-    g_phase3SellControlState = -1;
-
-    if (!g_phase3PriceThreadCached)
+    if (menuIndex >= g_phase3PriceThreadInfo.stackSize
+        || controlIndex
+            >= g_phase3PriceThreadInfo.stackSize)
     {
-        Phase2ThreadInfo threadInfo{};
-        if (!GetPhase2ThreadInfo(
-                kCarmodShopHash,
-                threadInfo)
-            || !threadInfo.stack)
-        {
-            return;
-        }
-
-        g_phase3PriceThreadInfo = threadInfo;
-        g_phase3PriceThreadCached = true;
-    }
-
-    const uint32_t index =
-        g_phase3SellPricePath.element0StaticIndex;
-
-    if (index >= g_phase3PriceThreadInfo.stackSize)
-    {
+        g_phase3CurrentMenuState = -1;
+        g_phase3SellControlState = -1;
         g_phase3PriceThreadInfo = Phase2ThreadInfo{};
         g_phase3PriceThreadCached = false;
         return;
     }
 
-    unsigned char* slot =
-        reinterpret_cast<unsigned char*>(
-            g_phase3PriceThreadInfo.stack)
-        + static_cast<size_t>(index)
+    const unsigned char* stack =
+        reinterpret_cast<const unsigned char*>(
+            g_phase3PriceThreadInfo.stack);
+
+    const unsigned char* menuSlot =
+        stack
+        + static_cast<size_t>(menuIndex)
             * sizeof(uintptr_t);
 
-    uint64_t raw = 0;
-    if (!IsReadableMemory(slot, sizeof(raw)))
-    {
-        g_phase3PriceThreadInfo = Phase2ThreadInfo{};
-        g_phase3PriceThreadCached = false;
-        return;
-    }
-
-    std::memcpy(&raw, slot, sizeof(raw));
-
-    const int32_t rockstarPrice =
-        static_cast<int32_t>(
-            raw & 0xFFFFFFFFULL);
-
-    if (rockstarPrice > 0)
-    {
-        g_phase3SellContextActive = true;
-        g_phase3SellContextPrice =
-            static_cast<int>(rockstarPrice);
-        return;
-    }
-
-    const Ped playerPed =
-        PLAYER::PLAYER_PED_ID();
-
-    if (!PED::IS_PED_IN_ANY_VEHICLE(
-            playerPed,
-            false))
-    {
-        return;
-    }
-
-    const Vehicle vehicle =
-        PED::GET_VEHICLE_PED_IS_IN(
-            playerPed,
-            false);
-
-    if (vehicle == 0
-        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
-    {
-        return;
-    }
-
-    const Hash model =
-        ENTITY::GET_ENTITY_MODEL(vehicle);
-
-    if (vehicle != g_phase3FallbackVehicle
-        || model != g_phase3FallbackModel)
-    {
-        g_phase3FallbackVehicle = vehicle;
-        g_phase3FallbackModel = model;
-        g_phase3FallbackPrice = 0;
-        g_phase3FallbackLogged = false;
-    }
-
-    int fallbackPrice = g_phase3FallbackPrice;
-
-    if (fallbackPrice <= 0)
-    {
-        const int modelValue =
-            GetPhase3VehicleModelValue(
-                model);
-
-        if (modelValue <= 0)
-        {
-            if (!g_phase3FallbackLogged)
-            {
-                Logf(
-                    "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d modelValue=%d reason=model value unavailable",
-                    static_cast<int>(vehicle),
-                    static_cast<unsigned int>(model),
-                    static_cast<int>(rockstarPrice),
-                    modelValue);
-                g_phase3FallbackLogged = true;
-            }
-
-            return;
-        }
-
-        const int64_t scaled =
-            static_cast<int64_t>(modelValue) * 60LL;
-
-        fallbackPrice =
-            static_cast<int>(scaled / 100LL);
-
-        if (fallbackPrice <= 0)
-            fallbackPrice = modelValue;
-
-        g_phase3FallbackPrice = fallbackPrice;
-    }
-
-    const uint64_t patchedRaw =
-        (raw & 0xFFFFFFFF00000000ULL)
-        | static_cast<uint32_t>(
-            fallbackPrice);
-
+    uint64_t menuRaw = 0;
     std::memcpy(
-        slot,
-        &patchedRaw,
-        sizeof(patchedRaw));
+        &menuRaw,
+        menuSlot,
+        sizeof(menuRaw));
 
-    uint64_t verify = 0;
-    std::memcpy(&verify, slot, sizeof(verify));
-
-    const int32_t verifiedPrice =
+    g_phase3CurrentMenuState =
         static_cast<int32_t>(
-            verify & 0xFFFFFFFFULL);
+            menuRaw & 0xFFFFFFFFULL);
 
-    if (verifiedPrice != fallbackPrice)
-    {
-        if (!g_phase3FallbackLogged)
-        {
-            Logf(
-                "[Phase3N] SellPriceFallback=no vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d reason=write verification failed observed=%d",
-                static_cast<int>(vehicle),
-                static_cast<unsigned int>(model),
-                static_cast<int>(rockstarPrice),
-                fallbackPrice,
-                static_cast<int>(verifiedPrice));
-            g_phase3FallbackLogged = true;
-        }
+    g_phase3SellStageActive =
+        g_phase3CurrentMenuState
+        == g_phase3SellStagePath.sellMenuValue;
 
-        return;
-    }
-
-    g_phase3SellContextActive = true;
-    g_phase3SellContextPrice = fallbackPrice;
-
-    if (!g_phase3FallbackLogged)
+    if (g_phase3CurrentMenuState
+            != g_phase3LastLoggedMenuState)
     {
         Logf(
-            "[Phase3N] SellPriceFallback=yes vehicle=%d model=0x%08X rockstarPrice=%d fallback=%d basis=GET_VEHICLE_MODEL_VALUE_60pct staticIndex=%u",
-            static_cast<int>(vehicle),
-            static_cast<unsigned int>(model),
-            static_cast<int>(rockstarPrice),
-            fallbackPrice,
-            static_cast<unsigned int>(index));
-        g_phase3FallbackLogged = true;
+            "[Phase3P] SellStage currentMenu=%d sellMenu=%d active=%s staticIndex=%u raw=0x%016llX",
+            g_phase3CurrentMenuState,
+            g_phase3SellStagePath.sellMenuValue,
+            g_phase3SellStageActive
+                ? "yes"
+                : "no",
+            static_cast<unsigned int>(
+                menuIndex),
+            static_cast<unsigned long long>(
+                menuRaw));
+
+        g_phase3LastLoggedMenuState =
+            g_phase3CurrentMenuState;
+
+        FlushLogBuffer();
+    }
+
+    if (!g_phase3SellStageActive)
+    {
+        if (g_phase3SellControlState != -1)
+        {
+            g_phase3SellControlState = -1;
+
+            if (g_phase3SellControlState
+                    != g_phase3LastLoggedSellControlState)
+            {
+                Logf(
+                    "[Phase3P] SellControl state=-1 reason=not-in-sell-stage");
+                g_phase3LastLoggedSellControlState = -1;
+                FlushLogBuffer();
+            }
+        }
+        else
+        {
+            g_phase3SellControlState = -1;
+        }
+
+        return;
+    }
+
+    const unsigned char* controlSlot =
+        stack
+        + static_cast<size_t>(controlIndex)
+            * sizeof(uintptr_t);
+
+    uint64_t controlRaw = 0;
+    std::memcpy(
+        &controlRaw,
+        controlSlot,
+        sizeof(controlRaw));
+
+    const int value =
+        static_cast<int32_t>(
+            controlRaw & 0xFFFFFFFFULL);
+
+    g_phase3SellControlState =
+        value >= 0 && value <= 3
+            ? value
+            : -1;
+
+    if (g_phase3SellControlState
+            != g_phase3LastLoggedSellControlState)
+    {
+        Logf(
+            "[Phase3P] SellControl state=%d staticIndex=%u raw=0x%016llX",
+            g_phase3SellControlState,
+            static_cast<unsigned int>(
+                controlIndex),
+            static_cast<unsigned long long>(
+                controlRaw));
+
+        g_phase3LastLoggedSellControlState =
+            g_phase3SellControlState;
+
+        FlushLogBuffer();
     }
 }
 
@@ -6164,6 +6400,10 @@ static void UpdatePhase3Diagnostics()
         program,
         sellHandler,
         functions);
+    ResolvePhase3SellStagePath(
+        program,
+        functions,
+        sellHandler);
     ResolvePhase3SellControlPath(
         program,
         sellHandler);
@@ -6660,6 +6900,9 @@ static void BeginCarmodShopSession()
     g_phase3SellContextPrice = 0;
     g_phase3SellControlState = -1;
     g_phase3LastLoggedSellControlState = -999;
+    g_phase3CurrentMenuState = -1;
+    g_phase3LastLoggedMenuState = -999;
+    g_phase3SellStageActive = false;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6695,6 +6938,9 @@ static void EndCarmodShopSession()
     g_phase3SellContextPrice = 0;
     g_phase3SellControlState = -1;
     g_phase3LastLoggedSellControlState = -999;
+    g_phase3CurrentMenuState = -1;
+    g_phase3LastLoggedMenuState = -999;
+    g_phase3SellStageActive = false;
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
@@ -6875,7 +7121,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.10 resolves the complete STATIC+IOFFSET chain feeding Rockstar's DO_STAGE_SELL switch and samples that one cached iControl slot every frame so short-lived accepted states cannot be missed. No input-count fallback is used.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.11 structurally resolves both the parent eMenu dispatcher case that calls DO_STAGE_SELL and the Sell iControl state. Completion and the Sell-price fallback are active only while the current menu is the resolved Sell stage.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
