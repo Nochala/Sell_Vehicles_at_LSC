@@ -587,6 +587,8 @@ static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
 static constexpr ULONGLONG kPhase3PriceUpdateIntervalMs = 50ULL;
 
+static void ResetPhase3PreparedSellPrice();
+
 static bool IsEnhancedEdition()
 {
     return _stricmp(GetEditionName(), "Enhanced") == 0;
@@ -6120,6 +6122,8 @@ static void UpdatePhase3SellPriceFallback()
             g_phase3PriceThreadInfo = Phase2ThreadInfo{};
             g_phase3PriceThreadCached = false;
             g_nextPhase3PriceUpdateAt = 0;
+            ResetPhase3PreparedSellPrice();
+            g_phase3DisplayPriceEventPending = false;
         }
 
         return;
