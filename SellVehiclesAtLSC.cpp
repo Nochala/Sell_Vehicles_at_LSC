@@ -4602,56 +4602,6 @@ static bool ResolvePhase3SellControlPath(
     return true;
 }
 
-static bool ReadPhase3SellControlState(
-    int& state)
-{
-    state = -1;
-
-    if (!g_phase3SellControlPath.resolved
-        || !g_phase3PriceThreadCached
-        || !g_phase3PriceThreadInfo.stack)
-    {
-        return false;
-    }
-
-    const uint32_t index =
-        g_phase3SellControlPath.staticIndex;
-
-    if (index >= g_phase3PriceThreadInfo.stackSize)
-        return false;
-
-    const unsigned char* slot =
-        reinterpret_cast<const unsigned char*>(
-            g_phase3PriceThreadInfo.stack)
-        + static_cast<size_t>(index)
-            * sizeof(uintptr_t);
-
-    uint64_t raw = 0;
-    if (!IsReadableMemory(
-            slot,
-            sizeof(raw)))
-    {
-        return false;
-    }
-
-    std::memcpy(
-        &raw,
-        slot,
-        sizeof(raw));
-
-    const int32_t value =
-        static_cast<int32_t>(
-            raw & 0xFFFFFFFFULL);
-
-    // Rockstar's DO_STAGE_SELL iControl is strictly 0..3. Anything else
-    // means the structurally resolved slot is not trustworthy for completion.
-    if (value < 0 || value > 3)
-        return false;
-
-    state = static_cast<int>(value);
-    return true;
-}
-
 static void UpdatePhase3SellPriceFallback()
 {
     if (!g_phase3Enabled
