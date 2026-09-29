@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.11 Phase 3O Sell-stage gated runtime";
+static const char* kBuildTag = "v0.3.12 Phase 3O confirmed-sale delay";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -7267,7 +7267,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N keeps the Phase 3M eligibility/ownership patches unchanged and adds a narrow Sell-price fallback. When Rockstar's structurally resolved ITEM_COST field is zero/invalid in Story Mode, the mod writes 60%% of GET_VEHICLE_MODEL_VALUE into that same field. Positive Rockstar prices are never overridden.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.11 structurally resolves both the parent eMenu dispatcher case that calls DO_STAGE_SELL and the Sell iControl state. Completion and the Sell-price fallback are active only while the current menu is the resolved Sell stage.");
+    Logf("[Info] SellCompletion does not replace Rockstar's Sell menu, payout, eligibility, or price logic. v0.3.12 keeps the validated Sell-stage + iControl trigger unchanged and adds a light 500 ms delay after Rockstar confirms the sale before fade-out begins.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify fade-out, vehicle removal, exterior teleport, and fade-in. Send the log if any step does not complete.");
 }
