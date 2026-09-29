@@ -50,6 +50,11 @@ namespace
     static bool g_confirmationSeen = false;
     static int g_lastSellPrice = 0;
 
+    static int g_salePayout = 0;
+    static Hash g_saleCashStat = 0;
+    static const char* g_saleAccountName = nullptr;
+    static bool g_payoutApplied = false;
+
     static Vehicle g_soldVehicle = 0;
     static Ped g_playerPed = 0;
     static ExteriorPoint g_exitPoint{};
@@ -116,6 +121,143 @@ namespace
         return kExteriorPoints[bestIndex];
     }
 
+    static Hash ResolveStoryCashStat(
+        Ped ped,
+        const char*& accountName)
+    {
+        accountName = nullptr;
+
+        if (ped == 0
+            || !ENTITY::DOES_ENTITY_EXIST(ped))
+        {
+            return 0;
+        }
+
+        const Hash model =
+            ENTITY::GET_ENTITY_MODEL(ped);
+
+        if (model
+            == GAMEPLAY::GET_HASH_KEY(
+                "player_zero"))
+        {
+            accountName = "Michael";
+            return GAMEPLAY::GET_HASH_KEY(
+                "SP0_TOTAL_CASH");
+        }
+
+        if (model
+            == GAMEPLAY::GET_HASH_KEY(
+                "player_one"))
+        {
+            accountName = "Franklin";
+            return GAMEPLAY::GET_HASH_KEY(
+                "SP1_TOTAL_CASH");
+        }
+
+        if (model
+            == GAMEPLAY::GET_HASH_KEY(
+                "player_two"))
+        {
+            accountName = "Trevor";
+            return GAMEPLAY::GET_HASH_KEY(
+                "SP2_TOTAL_CASH");
+        }
+
+        return 0;
+    }
+
+    static bool DepositSalePayout()
+    {
+        if (g_payoutApplied)
+            return true;
+
+        if (g_salePayout <= 0)
+        {
+            Log(
+                "payout skipped: invalid sale price=%d",
+                g_salePayout);
+            return false;
+        }
+
+        if (g_saleCashStat == 0)
+        {
+            Log(
+                "payout skipped: unsupported Story Mode character");
+            return false;
+        }
+
+        int balanceBefore = -1;
+        STATS::STAT_GET_INT(
+            g_saleCashStat,
+            &balanceBefore,
+            -1);
+
+        if (balanceBefore < 0)
+        {
+            Log(
+                "payout failed: could not read %s balance stat=0x%08X",
+                g_saleAccountName
+                    ? g_saleAccountName
+                    : "unknown",
+                static_cast<unsigned int>(
+                    g_saleCashStat));
+            return false;
+        }
+
+        const long long desiredBalance =
+            static_cast<long long>(
+                balanceBefore)
+            + static_cast<long long>(
+                g_salePayout);
+
+        const int balanceAfter =
+            desiredBalance > 2147483647LL
+                ? 2147483647
+                : static_cast<int>(
+                    desiredBalance);
+
+        STATS::STAT_SET_INT(
+            g_saleCashStat,
+            balanceAfter,
+            true);
+
+        int verifiedBalance = -1;
+        STATS::STAT_GET_INT(
+            g_saleCashStat,
+            &verifiedBalance,
+            -1);
+
+        if (verifiedBalance != balanceAfter)
+        {
+            Log(
+                "payout failed verification account=%s stat=0x%08X requested=%d before=%d expected=%d observed=%d",
+                g_saleAccountName
+                    ? g_saleAccountName
+                    : "unknown",
+                static_cast<unsigned int>(
+                    g_saleCashStat),
+                g_salePayout,
+                balanceBefore,
+                balanceAfter,
+                verifiedBalance);
+            return false;
+        }
+
+        g_payoutApplied = true;
+
+        Log(
+            "payout deposited account=%s requested=%d credited=%d balanceBefore=%d balanceAfter=%d",
+            g_saleAccountName
+                ? g_saleAccountName
+                : "unknown",
+            g_salePayout,
+            verifiedBalance - balanceBefore,
+            balanceBefore,
+            verifiedBalance);
+
+        return true;
+    }
+
     static void ClearSellContext()
     {
         g_sellContextActive = false;
@@ -126,6 +268,10 @@ namespace
     static void ResetCompletionState()
     {
         g_state = CompletionState::Idle;
+        g_salePayout = 0;
+        g_saleCashStat = 0;
+        g_saleAccountName = nullptr;
+        g_payoutApplied = false;
         g_soldVehicle = 0;
         g_playerPed = 0;
         g_exitPoint = ExteriorPoint{};
@@ -170,10 +316,22 @@ namespace
         g_exitPoint =
             FindNearestExterior(position);
 
+        g_salePayout = g_lastSellPrice;
+        g_saleCashStat =
+            ResolveStoryCashStat(
+                ped,
+                g_saleAccountName);
+        g_payoutApplied = false;
+
         Log(
-            "armed vehicle=%d price=%d exit=%s pos=(%.3f, %.3f, %.3f)",
+            "armed vehicle=%d price=%d payoutAccount=%s payoutStat=0x%08X exit=%s pos=(%.3f, %.3f, %.3f)",
             static_cast<int>(g_soldVehicle),
             g_lastSellPrice,
+            g_saleAccountName
+                ? g_saleAccountName
+                : "unsupported",
+            static_cast<unsigned int>(
+                g_saleCashStat),
             g_exitPoint.name,
             position.x,
             position.y,
@@ -378,6 +536,8 @@ namespace
             {
                 return;
             }
+
+            DepositSalePayout();
 
             Log("completion finished");
             ResetCompletionState();
