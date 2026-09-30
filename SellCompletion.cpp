@@ -60,6 +60,8 @@ namespace
     static ULONGLONG g_cashHudUntil = 0;
     static bool g_useSellCooldown = false;
     static int g_sellCooldownMinutes = 48;
+    static ULONGLONG g_sellCooldownStartedAt = 0;
+    static ULONGLONG g_sellCooldownUntil = 0;
 
     static Vehicle g_soldVehicle = 0;
     static Ped g_playerPed = 0;
@@ -364,75 +366,31 @@ namespace
         return true;
     }
 
-    static void ApplyNativeSellCooldown()
+    static void ArmNativeSellCooldown(
+        ULONGLONG now)
     {
         if (!g_useSellCooldown)
-            return;
-
-        // Rockstar's native LSC gate compares GET_CLOUD_TIME_AS_INT() against
-        // MPPLY_VEHICLE_SELL_TIME using a 2880-second (48-minute) interval.
-        // _GET_POSIX_TIME is the native exposed by this ScriptHookV header for
-        // that same cloud/POSIX time source.
-        const int cloudTime =
-            NETWORK::_GET_POSIX_TIME();
-
-        if (cloudTime <= 0)
         {
-            Log(
-                "native sell cooldown skipped: cloud time unavailable");
+            g_sellCooldownStartedAt = 0;
+            g_sellCooldownUntil = 0;
             return;
         }
 
-        const long long requestedSeconds =
-            static_cast<long long>(
+        const ULONGLONG durationMs =
+            static_cast<ULONGLONG>(
                 g_sellCooldownMinutes)
-            * 60LL;
+            * 60ULL
+            * 1000ULL;
 
-        // Shift the native timestamp relative to Rockstar's stock 2880-second
-        // gate. At 48 minutes this stores the real cloud time exactly. Other
-        // configured durations still use Rockstar's own CMOD_NOSELL3 path.
-        long long adjustedSellTime =
-            static_cast<long long>(cloudTime)
-            + requestedSeconds
-            - static_cast<long long>(
-                kNativeSellCooldownSeconds);
-
-        if (adjustedSellTime < 0)
-            adjustedSellTime = 0;
-        else if (adjustedSellTime > 2147483647LL)
-            adjustedSellTime = 2147483647LL;
-
-        const Hash sellTimeStat =
-            GAMEPLAY::GET_HASH_KEY(
-                "MPPLY_VEHICLE_SELL_TIME");
-
-        const int storedSellTime =
-            static_cast<int>(adjustedSellTime);
-
-        if (!STATS::STAT_SET_INT(
-                sellTimeStat,
-                storedSellTime,
-                true))
-        {
-            Log(
-                "native sell cooldown failed: could not write MPPLY_VEHICLE_SELL_TIME");
-            return;
-        }
-
-        int verifiedSellTime = 0;
-        const BOOL verified =
-            STATS::STAT_GET_INT(
-                sellTimeStat,
-                &verifiedSellTime,
-                -1);
+        g_sellCooldownStartedAt = now;
+        g_sellCooldownUntil =
+            now + durationMs;
 
         Log(
-            "native sell cooldown armed minutes=%d cloudTime=%d stored=%d verified=%s observed=%d",
+            "native Sell cooldown armed minutes=%d durationMs=%llu",
             g_sellCooldownMinutes,
-            cloudTime,
-            storedSellTime,
-            verified ? "yes" : "no",
-            verifiedSellTime);
+            static_cast<unsigned long long>(
+                durationMs));
     }
 
     static void DeleteSoldVehicle()
@@ -519,7 +477,7 @@ namespace
         if (!CaptureSaleTarget())
             return false;
 
-        ApplyNativeSellCooldown();
+        ArmNativeSellCooldown(now);
 
         g_state =
             CompletionState::WaitingForFade;
@@ -663,11 +621,72 @@ namespace SellCompletion
                 : 48;
     }
 
+    bool TryGetCooldownClockOverride(
+        int& clockValue,
+        int& remainingSeconds)
+    {
+        clockValue = 0;
+        remainingSeconds = 0;
+
+        if (!g_useSellCooldown
+            || g_sellCooldownUntil == 0)
+        {
+            return false;
+        }
+
+        const ULONGLONG now =
+            GetTickCount64();
+
+        if (now >= g_sellCooldownUntil)
+        {
+            g_sellCooldownStartedAt = 0;
+            g_sellCooldownUntil = 0;
+            return false;
+        }
+
+        const ULONGLONG remainingMs =
+            g_sellCooldownUntil - now;
+
+        remainingSeconds =
+            static_cast<int>(
+                (remainingMs + 999ULL)
+                / 1000ULL);
+
+        // Rockstar's original Story Mode-visible Sell path compares:
+        //   GET_CLOUD_TIME_AS_INT() - MPPLY_VEHICLE_SELL_TIME
+        //       < 2880 / iMaxNumberStolenVehiclesSoldDaily
+        //
+        // MPPLY_VEHICLE_SELL_TIME cannot be written through STAT_SET_INT in
+        // Story Mode. At the exact resolved clock-native callsite, return a
+        // synthetic elapsed value that remains below Rockstar's stock 2880
+        // second threshold for the requested duration. The rest of Rockstar's
+        // condition and CMOD_NOSELL3 handling remain untouched.
+        const int syntheticElapsed =
+            kNativeSellCooldownSeconds
+            - remainingSeconds;
+
+        clockValue =
+            syntheticElapsed > 0
+                ? syntheticElapsed
+                : 0;
+
+        if (clockValue
+            >= kNativeSellCooldownSeconds)
+        {
+            clockValue =
+                kNativeSellCooldownSeconds - 1;
+        }
+
+        return true;
+    }
+
     void Reset()
     {
         ClearSellContext();
         ResetCompletionState();
         g_cashHudUntil = 0;
+        g_sellCooldownStartedAt = 0;
+        g_sellCooldownUntil = 0;
     }
 
     void Update(
