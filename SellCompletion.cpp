@@ -110,9 +110,9 @@ namespace
                 kExteriorPoints[0]);
 
         for (size_t i = 1;
-             i < sizeof(kExteriorPoints)
-                 / sizeof(kExteriorPoints[0]);
-             ++i)
+            i < sizeof(kExteriorPoints)
+            / sizeof(kExteriorPoints[0]);
+            ++i)
         {
             const float distance =
                 DistanceSquared(
@@ -205,8 +205,8 @@ namespace
             Log(
                 "payout failed: could not read %s balance stat=0x%08X",
                 g_saleAccountName
-                    ? g_saleAccountName
-                    : "unknown",
+                ? g_saleAccountName
+                : "unknown",
                 static_cast<unsigned int>(
                     g_saleCashStat));
             return false;
@@ -220,9 +220,9 @@ namespace
 
         const int balanceAfter =
             desiredBalance > 2147483647LL
-                ? 2147483647
-                : static_cast<int>(
-                    desiredBalance);
+            ? 2147483647
+            : static_cast<int>(
+                desiredBalance);
 
         STATS::STAT_SET_INT(
             g_saleCashStat,
@@ -240,8 +240,8 @@ namespace
             Log(
                 "payout failed verification account=%s stat=0x%08X requested=%d before=%d expected=%d observed=%d",
                 g_saleAccountName
-                    ? g_saleAccountName
-                    : "unknown",
+                ? g_saleAccountName
+                : "unknown",
                 static_cast<unsigned int>(
                     g_saleCashStat),
                 g_salePayout,
@@ -259,8 +259,8 @@ namespace
         Log(
             "payout deposited account=%s requested=%d credited=%d balanceBefore=%d balanceAfter=%d",
             g_saleAccountName
-                ? g_saleAccountName
-                : "unknown",
+            ? g_saleAccountName
+            : "unknown",
             g_salePayout,
             verifiedBalance - balanceBefore,
             balanceBefore,
@@ -309,8 +309,8 @@ namespace
             PLAYER::PLAYER_PED_ID();
 
         if (!PED::IS_PED_IN_ANY_VEHICLE(
-                ped,
-                false))
+            ped,
+            false))
         {
             Log(
                 "completion not armed: player is not in a vehicle");
@@ -352,8 +352,8 @@ namespace
             static_cast<int>(g_soldVehicle),
             g_lastSellPrice,
             g_saleAccountName
-                ? g_saleAccountName
-                : "unsupported",
+            ? g_saleAccountName
+            : "unsupported",
             static_cast<unsigned int>(
                 g_saleCashStat),
             g_exitPoint.name,
@@ -409,7 +409,7 @@ namespace
         VEHICLE::DELETE_VEHICLE(&vehicle);
 
         if (ENTITY::DOES_ENTITY_EXIST(
-                g_soldVehicle))
+            g_soldVehicle))
         {
             Entity entity =
                 static_cast<Entity>(
@@ -422,8 +422,8 @@ namespace
             static_cast<int>(g_soldVehicle),
             ENTITY::DOES_ENTITY_EXIST(
                 g_soldVehicle)
-                ? "yes"
-                : "no");
+            ? "yes"
+            : "no");
     }
 
     static void TeleportPlayerOutside()
@@ -517,7 +517,7 @@ namespace
         case CompletionState::FadingOut:
             if (!CAM::IS_SCREEN_FADED_OUT()
                 && now - g_stateStartedAt
-                    < kFadeOutTimeoutMs)
+                < kFadeOutTimeoutMs)
             {
                 return;
             }
@@ -552,7 +552,7 @@ namespace
                     g_soldVehicle,
                     false)
                 && now - g_stateStartedAt
-                    < kDetachTimeoutMs)
+                < kDetachTimeoutMs)
             {
                 return;
             }
@@ -584,8 +584,8 @@ namespace
         case CompletionState::FadingIn:
             if (!CAM::IS_SCREEN_FADED_IN()
                 && now - g_stateStartedAt
-                    < static_cast<ULONGLONG>(
-                        kFadeInMs + 1000))
+                < static_cast<ULONGLONG>(
+                    kFadeInMs + 1000))
             {
                 return;
             }
@@ -615,8 +615,8 @@ namespace SellCompletion
         g_useSellCooldown = enabled;
         g_sellCooldownMinutes =
             minutes > 0
-                ? minutes
-                : 48;
+            ? minutes
+            : 48;
     }
 
     bool TryGetCooldownClockOverride(
@@ -656,8 +656,8 @@ namespace SellCompletion
 
         clockValue =
             syntheticElapsed > 0
-                ? syntheticElapsed
-                : 0;
+            ? syntheticElapsed
+            : 0;
 
         if (clockValue
             >= kNativeSellCooldownSeconds)
@@ -749,9 +749,9 @@ namespace SellCompletion
             }
 
             if (!ArmPostSaleTransition(
-                    now,
-                    "rockstar-confirmed",
-                    sellControlState))
+                now,
+                "rockstar-confirmed",
+                sellControlState))
             {
                 ClearSellContext();
             }

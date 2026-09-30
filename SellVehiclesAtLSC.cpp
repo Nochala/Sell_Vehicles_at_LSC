@@ -43,15 +43,15 @@ static bool g_phase2Enabled = true;
 static bool g_phase3Enabled = true;
 
 static constexpr uint64_t kDoesScriptWithNameHashExistNative =
-    0xF86AA3C56BA31381ULL;
+0xF86AA3C56BA31381ULL;
 static constexpr uint64_t kHasScriptWithNameHashLoadedNative =
-    0x5F0F0C783EB16C04ULL;
+0x5F0F0C783EB16C04ULL;
 static constexpr uint64_t kRequestScriptWithNameHashNative =
-    0xD62A67D26D9653E6ULL;
+0xD62A67D26D9653E6ULL;
 static constexpr uint64_t kGetNumberOfThreadsRunningScriptHashNative =
-    0x2C83A9DA6BFFC4F9ULL;
+0x2C83A9DA6BFFC4F9ULL;
 static constexpr uint64_t kGetVehicleModelValueNative =
-    0x5873C14A52D74236ULL;
+0x5873C14A52D74236ULL;
 
 struct ScriptProbe
 {
@@ -69,7 +69,7 @@ static ScriptProbe g_scriptProbes[] =
 };
 
 static constexpr size_t kScriptProbeCount =
-    sizeof(g_scriptProbes) / sizeof(g_scriptProbes[0]);
+sizeof(g_scriptProbes) / sizeof(g_scriptProbes[0]);
 
 static bool g_carmodShopActive = false;
 static bool g_lastNetworkGame = false;
@@ -231,9 +231,9 @@ static bool ContainsInsensitive(
     for (const char* p = text; *p; ++p)
     {
         if (_strnicmp(
-                p,
-                needle,
-                needleLength) == 0)
+            p,
+            needle,
+            needleLength) == 0)
         {
             return true;
         }
@@ -265,13 +265,13 @@ static bool IsFailureDiagnostic(
     };
 
     for (size_t i = 0;
-         i < sizeof(failureMarkers)
-             / sizeof(failureMarkers[0]);
-         ++i)
+        i < sizeof(failureMarkers)
+        / sizeof(failureMarkers[0]);
+        ++i)
     {
         if (ContainsInsensitive(
-                message,
-                failureMarkers[i]))
+            message,
+            failureMarkers[i]))
         {
             return true;
         }
@@ -459,8 +459,8 @@ static bool IsPlayerNearStockLsc()
         static_cast<Entity>(ped);
 
     if (PED::IS_PED_IN_ANY_VEHICLE(
-            ped,
-            false))
+        ped,
+        false))
     {
         const Vehicle vehicle =
             PED::GET_VEHICLE_PED_IS_IN(
@@ -484,16 +484,16 @@ static bool IsPlayerNearStockLsc()
 
     const float radius =
         g_stockLscScopeActive
-            ? kStockLscDeactivationRadius
-            : kStockLscActivationRadius;
+        ? kStockLscDeactivationRadius
+        : kStockLscActivationRadius;
 
     const float radiusSquared =
         radius * radius;
 
     for (size_t i = 0;
-         i < sizeof(kStockLscPoints)
-             / sizeof(kStockLscPoints[0]);
-         ++i)
+        i < sizeof(kStockLscPoints)
+        / sizeof(kStockLscPoints[0]);
+        ++i)
     {
         const float dx =
             position.x - kStockLscPoints[i].x;
@@ -1110,12 +1110,12 @@ static bool InitializePhase2Internals()
 
             if (resolved)
                 g_enhancedPrograms =
-                    reinterpret_cast<Phase2ScrProgram**>(resolved + 0xD8);
+                reinterpret_cast<Phase2ScrProgram**>(resolved + 0xD8);
         }
 
         if (threadMatch)
             g_threadArray =
-                reinterpret_cast<ScrThreadArrayRaw*>(ResolveRip(threadMatch + 3));
+            reinterpret_cast<ScrThreadArrayRaw*>(ResolveRip(threadMatch + 3));
 
         Logf(
             "[Phase2] Enhanced internals programPattern=%p programArray=%p threadPattern=%p threadArray=%p",
@@ -1145,7 +1145,7 @@ static bool InitializePhase2Internals()
 
         if (programMatch)
             g_legacyScriptTable =
-                reinterpret_cast<LegacyScriptTable*>(ResolveRip(programMatch + 3));
+            reinterpret_cast<LegacyScriptTable*>(ResolveRip(programMatch + 3));
 
         if (threadMatch)
         {
@@ -1154,7 +1154,7 @@ static bool InitializePhase2Internals()
 
             if (resolved)
                 g_threadArray =
-                    reinterpret_cast<ScrThreadArrayRaw*>(resolved - 8);
+                reinterpret_cast<ScrThreadArrayRaw*>(resolved - 8);
         }
 
         Logf(
@@ -1196,8 +1196,8 @@ static Phase2ScrProgram* FindPhase2Program(uint32_t scriptHash)
     if (IsEnhancedEdition())
     {
         if (!IsReadableMemory(
-                g_enhancedPrograms,
-                sizeof(Phase2ScrProgram*) * kEnhancedProgramCount))
+            g_enhancedPrograms,
+            sizeof(Phase2ScrProgram*) * kEnhancedProgramCount))
         {
             return nullptr;
         }
@@ -1579,15 +1579,15 @@ static bool VmReferencesLocalIndex(
 
     if (*opPtr == kVmLocalU8Load || (!loadOnly && *opPtr == kVmLocalU8))
         return ReadScriptUnsigned(program, position + 1, 1, value)
-            && value == expected;
+        && value == expected;
 
     if (*opPtr == kVmLocalU16Load || (!loadOnly && *opPtr == kVmLocalU16))
         return ReadScriptUnsigned(program, position + 1, 2, value)
-            && value == expected;
+        && value == expected;
 
     if (*opPtr == kVmLocalU24Load || (!loadOnly && *opPtr == kVmLocalU24))
         return ReadScriptUnsigned(program, position + 1, 3, value)
-            && value == expected;
+        && value == expected;
 
     return false;
 }
@@ -1763,8 +1763,8 @@ static bool FindSellVisibilityCall(
     int candidateCount = 0;
 
     for (size_t functionIndex = 0;
-         functionIndex < functions.size();
-         ++functionIndex)
+        functionIndex < functions.size();
+        ++functionIndex)
     {
         const VmFunctionRange& function = functions[functionIndex];
         if (function.argCount != 1 || function.end <= function.start)
@@ -1814,8 +1814,8 @@ static bool FindSellVisibilityCall(
 
             const VmFunctionRange* targetFunction =
                 callsBetween42And47 == 1
-                    ? FindVmFunctionByStart(functions, candidateTarget)
-                    : nullptr;
+                ? FindVmFunctionByStart(functions, candidateTarget)
+                : nullptr;
 
             uint16_t repeatedNativeIndex = 0xFFFF;
             const bool filterShapeMatches =
@@ -1835,12 +1835,12 @@ static bool FindSellVisibilityCall(
                 candidateTarget,
                 targetFunction ? targetFunction->index : -1,
                 targetFunction
-                    ? static_cast<unsigned int>(targetFunction->argCount)
-                    : 0U,
+                ? static_cast<unsigned int>(targetFunction->argCount)
+                : 0U,
                 repeatedNativeIndex != 0xFFFF ? "yes" : "no",
                 repeatedNativeIndex != 0xFFFF
-                    ? static_cast<unsigned int>(repeatedNativeIndex)
-                    : 0U,
+                ? static_cast<unsigned int>(repeatedNativeIndex)
+                : 0U,
                 filterShapeMatches ? "yes" : "no");
 
             if (!filterShapeMatches)
@@ -1921,11 +1921,11 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
     uint32_t callPosition = 0;
 
     if (!FindSellVisibilityCall(
-            program,
-            functions,
-            visibility,
-            sellFilter,
-            callPosition))
+        program,
+        functions,
+        visibility,
+        sellFilter,
+        callPosition))
     {
         g_phase2Status = "structural Sell gate not uniquely resolved";
         Logf("[Phase2] SellExposed=no reason=structural Sell gate not uniquely resolved");
@@ -1934,9 +1934,9 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
 
     uint16_t networkGameNativeIndex = 0xFFFF;
     if (!ValidateSellFilterShape(
-            program,
-            sellFilter,
-            networkGameNativeIndex))
+        program,
+        sellFilter,
+        networkGameNativeIndex))
     {
         g_phase2Status = "Sell filter revalidation failed";
         Logf("[Phase2] SellExposed=no reason=Sell filter revalidation failed");
@@ -2118,13 +2118,13 @@ static bool SetPhase2SellVisibilityBypass(
 
     const unsigned char* bytes =
         enabled
-            ? g_phase2VisibilityPatch
-            : g_phase2OriginalCall;
+        ? g_phase2VisibilityPatch
+        : g_phase2OriginalCall;
 
     if (!WriteVmPatch(
-            g_phase2PatchedProgram,
-            g_phase2PatchPosition,
-            bytes))
+        g_phase2PatchedProgram,
+        g_phase2PatchPosition,
+        bytes))
     {
         Logf(
             "[Gameplay] CharacterVehicle Sell visibility toggle failed enabled=%s reason=%s",
@@ -2156,8 +2156,8 @@ static void ApplyCharacterVehicleSettingForShop()
         PLAYER::PLAYER_PED_ID();
 
     if (!PED::IS_PED_IN_ANY_VEHICLE(
-            playerPed,
-            false))
+        playerPed,
+        false))
     {
 
         SetPhase2SellVisibilityBypass(
@@ -2181,10 +2181,10 @@ static void ApplyCharacterVehicleSettingForShop()
     SetPhase2SellVisibilityBypass(
         exposeSell,
         characterVehicle
-            ? (g_allowCharacterVehicles
-                ? "character vehicle allowed"
-                : "AllowCharacterVehicles=false")
-            : "non-character vehicle");
+        ? (g_allowCharacterVehicles
+            ? "character vehicle allowed"
+            : "AllowCharacterVehicles=false")
+        : "non-character vehicle");
 }
 
 static void RestoreCharacterVehicleSettingAfterShop()
@@ -2226,7 +2226,7 @@ static void UpdatePhase2SellExposure()
     if (!program
         || !IsReadableMemory(program, sizeof(*program))
         || static_cast<uint32_t>(program->nameHash)
-            != kCarmodShopHash
+        != kCarmodShopHash
         || program != g_phase3AnalyzedProgram)
     {
         g_structuralCacheReady = false;
@@ -2236,7 +2236,7 @@ static void UpdatePhase2SellExposure()
     }
 
     if (ReactivateCachedStockLscPatches(
-            program))
+        program))
     {
         return;
     }
@@ -2342,9 +2342,9 @@ static bool ScriptStringEqualsAt(
     {
         unsigned char value = 0;
         if (!ReadScriptStringByte(
-                program,
-                position + static_cast<uint32_t>(i),
-                value)
+            program,
+            position + static_cast<uint32_t>(i),
+            value)
             || value != static_cast<unsigned char>(text[i]))
         {
             return false;
@@ -2353,9 +2353,9 @@ static bool ScriptStringEqualsAt(
 
     unsigned char terminator = 0xFF;
     return ReadScriptStringByte(
-            program,
-            position + static_cast<uint32_t>(length),
-            terminator)
+        program,
+        position + static_cast<uint32_t>(length),
+        terminator)
         && terminator == 0;
 }
 
@@ -2447,8 +2447,8 @@ static bool CollectSellStringReferences(
                     static_cast<uint32_t>(pushedValue);
 
                 for (size_t anchorIndex = 0;
-                     anchorIndex < anchors.size();
-                     ++anchorIndex)
+                    anchorIndex < anchors.size();
+                    ++anchorIndex)
                 {
                     if (!OffsetMatchesAnchor(offset, anchors[anchorIndex]))
                         continue;
@@ -2655,12 +2655,12 @@ static void LogPhase3FunctionOutline(
             call.target,
             call.targetFunction ? call.targetFunction->index : -1,
             call.targetFunction
-                ? static_cast<unsigned int>(call.targetFunction->argCount)
-                : 0U,
+            ? static_cast<unsigned int>(call.targetFunction->argCount)
+            : 0U,
             call.targetFunction
-                ? static_cast<unsigned int>(
-                    call.targetFunction->end - call.targetFunction->start)
-                : 0U,
+            ? static_cast<unsigned int>(
+                call.targetFunction->end - call.targetFunction->start)
+            : 0U,
             targetNetworkRefs);
     }
 
@@ -2702,10 +2702,10 @@ static void LogPhase3FunctionOutline(
 
         std::vector<Phase3DirectCall> secondLevelCalls;
         if (!CollectDirectCalls(
-                program,
-                *calls[i].targetFunction,
-                functions,
-                secondLevelCalls))
+            program,
+            *calls[i].targetFunction,
+            functions,
+            secondLevelCalls))
         {
             continue;
         }
@@ -2799,11 +2799,11 @@ static bool ResolvePhase3SellHandler(
         int distinct = 0;
 
         if (!CollectSellStringReferences(
-                program,
-                functions[i],
-                anchors,
-                references,
-                distinct))
+            program,
+            functions[i],
+            anchors,
+            references,
+            distinct))
         {
             Logf(
                 "[Phase3] SellHandler resolution failed safely while scanning func=%d",
@@ -2907,11 +2907,11 @@ static bool ResolvePhase3SellCooldownPath(
     std::vector<Phase3StringReference> references;
     int distinct = 0;
     if (!CollectSellStringReferences(
-            program,
-            sellHandler,
-            anchors,
-            references,
-            distinct)
+        program,
+        sellHandler,
+        anchors,
+        references,
+        distinct)
         || references.empty())
     {
         Logf(
@@ -2931,11 +2931,11 @@ static bool ResolvePhase3SellCooldownPath(
 
         const uint32_t searchStart =
             messagePush > sellHandler.start + 0x100U
-                ? messagePush - 0x100U
-                : sellHandler.start;
+            ? messagePush - 0x100U
+            : sellHandler.start;
 
         for (uint32_t position = searchStart;
-             position < messagePush;)
+            position < messagePush;)
         {
             uint32_t length = 0;
             unsigned char* op =
@@ -2958,10 +2958,10 @@ static bool ResolvePhase3SellCooldownPath(
                 uint16_t nativeIndex = 0;
 
                 if (!ReadVmNativeSignature(
-                        program,
-                        position,
-                        packed,
-                        nativeIndex))
+                    program,
+                    position,
+                    packed,
+                    nativeIndex))
                 {
                     return false;
                 }
@@ -2980,7 +2980,7 @@ static bool ResolvePhase3SellCooldownPath(
 
                     if (pushStat
                         && *pushStat
-                            == kVmPushConstU32
+                        == kVmPushConstU32
                         && GetVmInstructionLength(
                             program,
                             p,
@@ -2995,7 +2995,7 @@ static bool ResolvePhase3SellCooldownPath(
 
                         if (getterCall
                             && *getterCall
-                                == kVmCall
+                            == kVmCall
                             && GetVmInstructionLength(
                                 program,
                                 p,
@@ -3019,11 +3019,11 @@ static bool ResolvePhase3SellCooldownPath(
 
                                 int thresholdBase = 0;
                                 if (TryGetVmPushedInt(
-                                        program,
-                                        p,
-                                        thresholdBase)
+                                    program,
+                                    p,
+                                    thresholdBase)
                                     && thresholdBase
-                                        == 2880)
+                                    == 2880)
                                 {
                                     bool hasLessThan =
                                         false;
@@ -3033,7 +3033,7 @@ static bool ResolvePhase3SellCooldownPath(
                                     while (verify
                                         < messagePush
                                         && verify
-                                            < p + 0x30U)
+                                        < p + 0x30U)
                                     {
                                         uint32_t verifyLength = 0;
                                         unsigned char* verifyOp =
@@ -3246,11 +3246,11 @@ static bool ResolvePhase3SellEligibilityFunction(
         int distinct = 0;
 
         if (!CollectSellStringReferences(
-                program,
-                functions[i],
-                anchors,
-                references,
-                distinct))
+            program,
+            functions[i],
+            anchors,
+            references,
+            distinct))
         {
             Logf(
                 "[Phase3M] SellEligibility=no reason=parser failure func=%d",
@@ -3320,7 +3320,7 @@ static bool ApplyHighValueSellRestrictionPatch(
     uint32_t precedingInstruction = 0xFFFFFFFFU;
 
     for (uint32_t position = eligibilityFunction.start;
-         position < messagePush;)
+        position < messagePush;)
     {
         uint32_t length = 0;
         unsigned char* op = ScriptCodePointer(program, position);
@@ -3350,8 +3350,8 @@ static bool ApplyHighValueSellRestrictionPatch(
         ScriptCodePointer(program, messagePush);
     unsigned char* branchOp =
         precedingInstruction != 0xFFFFFFFFU
-            ? ScriptCodePointer(program, precedingInstruction)
-            : nullptr;
+        ? ScriptCodePointer(program, precedingInstruction)
+        : nullptr;
 
     uint32_t precedingLength = 0;
     if (!pushOp
@@ -3375,9 +3375,9 @@ static bool ApplyHighValueSellRestrictionPatch(
 
     int16_t branchRelative = 0;
     if (!ReadScriptSigned16(
-            program,
-            precedingInstruction + 1,
-            branchRelative))
+        program,
+        precedingInstruction + 1,
+        branchRelative))
     {
         Logf(
             "[Phase3M] HighValueSellBypass=no reason=failed reading CMOD_NOSELL1 skip branch");
@@ -3418,7 +3418,7 @@ static bool ApplyHighValueSellRestrictionPatch(
     bool sawExitJump = false;
 
     for (uint32_t position = messagePush + 5;
-         position < skipTarget;)
+        position < skipTarget;)
     {
         uint32_t length = 0;
         unsigned char* op = ScriptCodePointer(program, position);
@@ -3575,11 +3575,11 @@ static bool ResolvePhase3PlayerOwnedHelper(
         int distinct = 0;
 
         if (!CollectSellStringReferences(
-                program,
-                functions[i],
-                anchors,
-                references,
-                distinct))
+            program,
+            functions[i],
+            anchors,
+            references,
+            distinct))
         {
             return false;
         }
@@ -3599,10 +3599,10 @@ static bool ResolvePhase3PlayerOwnedHelper(
 
         std::vector<uint32_t> sellHandlerCalls;
         if (!CollectCallsToVmFunction(
-                program,
-                sellHandler,
-                functions[i].start,
-                sellHandlerCalls))
+            program,
+            sellHandler,
+            functions[i].start,
+            sellHandlerCalls))
         {
             return false;
         }
@@ -3676,7 +3676,7 @@ static bool CollectCallsToVmFunction(
     calls.clear();
 
     for (uint32_t position = caller.start;
-         position < caller.end;)
+        position < caller.end;)
     {
         uint32_t length = 0;
         unsigned char* op = ScriptCodePointer(program, position);
@@ -3726,10 +3726,10 @@ static bool ApplySellPlayerOwnedCallPatches(
     std::vector<uint32_t> sellHandlerCalls;
 
     if (!CollectCallsToVmFunction(
-            program,
-            eligibilityFunction,
-            playerOwnedHelper.start,
-            eligibilityCalls)
+        program,
+        eligibilityFunction,
+        playerOwnedHelper.start,
+        eligibilityCalls)
         || !CollectCallsToVmFunction(
             program,
             sellHandler,
@@ -3755,10 +3755,10 @@ static bool ApplySellPlayerOwnedCallPatches(
     {
         const uint64_t distance =
             eligibilityCalls[i] > noSell1MessagePush
-                ? static_cast<uint64_t>(
-                    eligibilityCalls[i] - noSell1MessagePush)
-                : static_cast<uint64_t>(
-                    noSell1MessagePush - eligibilityCalls[i]);
+            ? static_cast<uint64_t>(
+                eligibilityCalls[i] - noSell1MessagePush)
+            : static_cast<uint64_t>(
+                noSell1MessagePush - eligibilityCalls[i]);
 
         if (distance < nearestDistance)
         {
@@ -3773,16 +3773,16 @@ static bool ApplySellPlayerOwnedCallPatches(
 
     while (clusterFirst > 0
         && eligibilityCalls[clusterFirst]
-            - eligibilityCalls[clusterFirst - 1]
-            <= kOwnershipClusterGap)
+        - eligibilityCalls[clusterFirst - 1]
+        <= kOwnershipClusterGap)
     {
         --clusterFirst;
     }
 
     while (clusterLast + 1 < eligibilityCalls.size()
         && eligibilityCalls[clusterLast + 1]
-            - eligibilityCalls[clusterLast]
-            <= kOwnershipClusterGap)
+        - eligibilityCalls[clusterLast]
+        <= kOwnershipClusterGap)
     {
         ++clusterLast;
     }
@@ -3885,8 +3885,8 @@ static bool ApplySellPlayerOwnedCallPatches(
             prepared.size());
 
         for (size_t i = 0;
-             i < prepared.size();
-             ++i)
+            i < prepared.size();
+            ++i)
         {
             VmPatchBackup backup{};
             backup.position =
@@ -3907,9 +3907,9 @@ static bool ApplySellPlayerOwnedCallPatches(
     for (; written < prepared.size(); ++written)
     {
         if (!WriteVmPatch(
-                program,
-                prepared[written].position,
-                patch))
+            program,
+            prepared[written].position,
+            patch))
         {
             break;
         }
@@ -3939,8 +3939,8 @@ static bool ApplySellPlayerOwnedCallPatches(
         prepared.size());
 
     for (size_t i = 0;
-         i < prepared.size();
-         ++i)
+        i < prepared.size();
+        ++i)
     {
         VmPatchBackup backup{};
         backup.position =
@@ -4007,8 +4007,8 @@ static void LogPhase3FocusedInstruction(
                 target,
                 targetFunction ? targetFunction->index : -1,
                 targetFunction
-                    ? static_cast<unsigned int>(targetFunction->argCount)
-                    : 0U);
+                ? static_cast<unsigned int>(targetFunction->argCount)
+                : 0U);
             return;
         }
     }
@@ -4163,7 +4163,7 @@ static void LogPhase3FocusedSellBytecode(
     uint32_t finalSellPush = 0;
 
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         uint32_t length = 0;
         unsigned char* op = ScriptCodePointer(program, position);
@@ -4231,7 +4231,7 @@ static void LogPhase3FocusedSellBytecode(
         requestedEnd);
 
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         uint32_t length = 0;
         unsigned char* op = ScriptCodePointer(program, position);
@@ -4323,7 +4323,7 @@ static Phase3NativeProbe g_phase3NativeProbes[] =
 };
 
 static constexpr size_t kPhase3NativeProbeCount =
-    sizeof(g_phase3NativeProbes) / sizeof(g_phase3NativeProbes[0]);
+sizeof(g_phase3NativeProbes) / sizeof(g_phase3NativeProbes[0]);
 
 static bool MatchSellPriceArraySequence(
     Phase2ScrProgram* program,
@@ -4352,10 +4352,10 @@ static bool MatchSellPriceArraySequence(
 
     uint32_t staticBaseRaw = 0;
     if (!ReadScriptUnsigned(
-            program,
-            staticPosition + 1,
-            2,
-            staticBaseRaw))
+        program,
+        staticPosition + 1,
+        2,
+        staticBaseRaw))
     {
         return false;
     }
@@ -4368,9 +4368,9 @@ static bool MatchSellPriceArraySequence(
 
     int16_t signedOffset = 0;
     if (!ReadScriptSigned16(
-            program,
-            offsetPosition + 1,
-            signedOffset))
+        program,
+        offsetPosition + 1,
+        signedOffset))
     {
         return false;
     }
@@ -4389,10 +4389,10 @@ static bool MatchSellPriceArraySequence(
 
     uint32_t strideRaw = 0;
     if (!ReadScriptUnsigned(
-            program,
-            arrayPosition + 1,
-            1,
-            strideRaw)
+        program,
+        arrayPosition + 1,
+        1,
+        strideRaw)
         || strideRaw == 0
         || strideRaw > 0xFFU)
     {
@@ -4435,7 +4435,7 @@ static bool ResolvePhase3SellPricePath(
     int itemCostReferences = 0;
 
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         uint32_t length = 0;
         unsigned char* op =
@@ -4455,9 +4455,9 @@ static bool ResolvePhase3SellPricePath(
 
         int pushedValue = -1;
         if (TryGetVmPushedInt(
-                program,
-                position,
-                pushedValue)
+            program,
+            position,
+            pushedValue)
             && pushedValue >= 0)
         {
             unsigned char* next =
@@ -4468,8 +4468,8 @@ static bool ResolvePhase3SellPricePath(
             if (next && *next == kVmString)
             {
                 for (size_t i = 0;
-                     i < itemCostOffsets.size();
-                     ++i)
+                    i < itemCostOffsets.size();
+                    ++i)
                 {
                     if (itemCostOffsets[i]
                         == static_cast<uint32_t>(
@@ -4506,13 +4506,13 @@ static bool ResolvePhase3SellPricePath(
         : sellHandler.end;
 
     for (uint32_t position = itemCostPush;
-         position < loadSearchEnd;)
+        position < loadSearchEnd;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             return false;
         }
@@ -4523,13 +4523,13 @@ static bool ResolvePhase3SellPricePath(
         uint32_t sequenceEnd = 0;
 
         if (MatchSellPriceArraySequence(
-                program,
-                position,
-                true,
-                candidateBase,
-                candidateOffset,
-                candidateStride,
-                sequenceEnd))
+            program,
+            position,
+            true,
+            candidateBase,
+            candidateOffset,
+            candidateStride,
+            sequenceEnd))
         {
             priceLoadPosition = position;
             staticBaseIndex = candidateBase;
@@ -4553,13 +4553,13 @@ static bool ResolvePhase3SellPricePath(
     int registerNativeMatches = 0;
 
     for (uint32_t position = sellHandler.start;
-         position < itemCostPush;)
+        position < itemCostPush;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             return false;
         }
@@ -4570,13 +4570,13 @@ static bool ResolvePhase3SellPricePath(
         uint32_t sequenceEnd = 0;
 
         if (MatchSellPriceArraySequence(
-                program,
-                position,
-                false,
-                candidateBase,
-                candidateOffset,
-                candidateStride,
-                sequenceEnd)
+            program,
+            position,
+            false,
+            candidateBase,
+            candidateOffset,
+            candidateStride,
+            sequenceEnd)
             && candidateBase == staticBaseIndex
             && candidateOffset == fieldOffset
             && candidateStride == arrayStride)
@@ -4593,10 +4593,10 @@ static bool ResolvePhase3SellPricePath(
                 uint16_t nativeIndex = 0;
 
                 if (ReadVmNativeSignature(
-                        program,
-                        sequenceEnd,
-                        packed,
-                        nativeIndex)
+                    program,
+                    sequenceEnd,
+                    packed,
+                    nativeIndex)
                     && (packed >> 2) == 1
                     && (packed & 0x03) == 0)
                 {
@@ -4632,13 +4632,13 @@ static bool ResolvePhase3SellPricePath(
         : sellHandler.start;
 
     for (uint32_t position = addressSearchStart;
-         position < itemCostPush;)
+        position < itemCostPush;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             return false;
         }
@@ -4649,13 +4649,13 @@ static bool ResolvePhase3SellPricePath(
         uint32_t sequenceEnd = 0;
 
         if (MatchSellPriceArraySequence(
-                program,
-                position,
-                false,
-                candidateBase,
-                candidateOffset,
-                candidateStride,
-                sequenceEnd)
+            program,
+            position,
+            false,
+            candidateBase,
+            candidateOffset,
+            candidateStride,
+            sequenceEnd)
             && candidateBase == staticBaseIndex
             && candidateOffset == fieldOffset
             && candidateStride == arrayStride)
@@ -4682,10 +4682,10 @@ static bool ResolvePhase3SellPricePath(
             {
                 uint32_t target = 0;
                 if (ReadScriptUnsigned(
-                        program,
-                        sequenceEnd + 3,
-                        3,
-                        target))
+                    program,
+                    sequenceEnd + 3,
+                    3,
+                    target))
                 {
                     const VmFunctionRange* targetFunction =
                         FindVmFunctionByStart(
@@ -4718,13 +4718,13 @@ static bool ResolvePhase3SellPricePath(
     int matchingPriceFieldUses = 0;
 
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             return false;
         }
@@ -4735,14 +4735,14 @@ static bool ResolvePhase3SellPricePath(
         uint32_t sequenceEnd = 0;
 
         if ((MatchSellPriceArraySequence(
-                program,
-                position,
-                true,
-                candidateBase,
-                candidateOffset,
-                candidateStride,
-                sequenceEnd)
-             || MatchSellPriceArraySequence(
+            program,
+            position,
+            true,
+            candidateBase,
+            candidateOffset,
+            candidateStride,
+            sequenceEnd)
+            || MatchSellPriceArraySequence(
                 program,
                 position,
                 false,
@@ -4826,15 +4826,15 @@ static bool ResolvePhase3SellPricePath(
             arrayStride),
         static_cast<unsigned int>(
             g_phase3SellPricePath
-                .element0StaticIndex),
+            .element0StaticIndex),
         matchingPriceFieldUses);
 
     std::vector<Phase3DirectCall> calls;
     if (!CollectDirectCalls(
-            program,
-            initializerFunction,
-            functions,
-            calls))
+        program,
+        initializerFunction,
+        functions,
+        calls))
     {
         Logf(
             "[Phase3L] Price initializer CALL analysis failed safely");
@@ -4855,14 +4855,14 @@ static bool ResolvePhase3SellPricePath(
             calls.size()));
 
     for (uint32_t position =
-             initializerFunction.start;
-         position < initializerFunction.end;)
+        initializerFunction.start;
+        position < initializerFunction.end;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             Logf(
                 "[Phase3L] PriceInitializer parser failed pc=0x%X",
@@ -4886,7 +4886,7 @@ static bool ResolvePhase3SellPricePath(
 
         const int networkRefs =
             g_phase2NetworkGameNativeIndex
-                != 0xFFFF
+            != 0xFFFF
             ? CountNativeIndexReferences(
                 program,
                 *calls[i].targetFunction,
@@ -4929,15 +4929,15 @@ static bool ResolvePhase3SellPricePath(
             networkRefs);
 
         for (uint32_t helperPosition =
-                 calls[i].targetFunction->start;
-             helperPosition
-                 < calls[i].targetFunction->end;)
+            calls[i].targetFunction->start;
+            helperPosition
+            < calls[i].targetFunction->end;)
         {
             uint32_t helperLength = 0;
             if (!GetVmInstructionLength(
-                    program,
-                    helperPosition,
-                    helperLength))
+                program,
+                helperPosition,
+                helperLength))
             {
                 break;
             }
@@ -4967,8 +4967,8 @@ static void LogPhase3SellPriceState(
 
     Phase2ThreadInfo threadInfo{};
     if (!GetPhase2ThreadInfo(
-            kCarmodShopHash,
-            threadInfo)
+        kCarmodShopHash,
+        threadInfo)
         || !threadInfo.stack)
     {
         Logf(
@@ -4979,7 +4979,7 @@ static void LogPhase3SellPriceState(
 
     const uint32_t index =
         g_phase3SellPricePath
-            .element0StaticIndex;
+        .element0StaticIndex;
 
     if (index >= threadInfo.stackSize)
     {
@@ -4997,12 +4997,12 @@ static void LogPhase3SellPriceState(
         reinterpret_cast<const unsigned char*>(
             threadInfo.stack)
         + static_cast<size_t>(index)
-            * sizeof(uintptr_t);
+        * sizeof(uintptr_t);
 
     uint64_t raw = 0;
     if (!IsReadableMemory(
-            slot,
-            sizeof(raw)))
+        slot,
+        sizeof(raw)))
     {
         Logf(
             "[Phase3L] PriceState reason=%s readable=no index=%u",
@@ -5063,11 +5063,11 @@ static bool TryGetPhase3SwitchStaticIndex(
 
     const size_t firstIndex =
         switchInstructionIndex > 12
-            ? switchInstructionIndex - 12
-            : 0;
+        ? switchInstructionIndex - 12
+        : 0;
 
     for (size_t i = switchInstructionIndex;
-         i-- > firstIndex;)
+        i-- > firstIndex;)
     {
         const uint32_t position =
             instructionPositions[i];
@@ -5086,10 +5086,10 @@ static bool TryGetPhase3SwitchStaticIndex(
         {
             uint32_t directIndex = 0;
             if (!ReadScriptUnsigned(
-                    program,
-                    position + 1,
-                    *op == 0x50 ? 2U : 3U,
-                    directIndex))
+                program,
+                position + 1,
+                *op == 0x50 ? 2U : 3U,
+                directIndex))
             {
                 return false;
             }
@@ -5103,10 +5103,10 @@ static bool TryGetPhase3SwitchStaticIndex(
         {
             uint32_t rawOffset = 0;
             if (!ReadScriptUnsigned(
-                    program,
-                    position + 1,
-                    1,
-                    rawOffset))
+                program,
+                position + 1,
+                1,
+                rawOffset))
             {
                 return false;
             }
@@ -5123,9 +5123,9 @@ static bool TryGetPhase3SwitchStaticIndex(
         {
             int16_t rawOffset = 0;
             if (!ReadScriptSigned16(
-                    program,
-                    position + 1,
-                    rawOffset))
+                program,
+                position + 1,
+                rawOffset))
             {
                 return false;
             }
@@ -5143,10 +5143,10 @@ static bool TryGetPhase3SwitchStaticIndex(
         {
             uint32_t baseStatic = 0;
             if (!ReadScriptUnsigned(
-                    program,
-                    position + 1,
-                    *op == 0x4F ? 2U : 3U,
-                    baseStatic))
+                program,
+                position + 1,
+                *op == 0x4F ? 2U : 3U,
+                baseStatic))
             {
                 return false;
             }
@@ -5191,22 +5191,22 @@ static bool Phase3RangeReferencesAnyString(
     }
 
     for (uint32_t position = start;
-         position < end;)
+        position < end;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             return false;
         }
 
         int pushedValue = -1;
         if (TryGetVmPushedInt(
-                program,
-                position,
-                pushedValue)
+            program,
+            position,
+            pushedValue)
             && pushedValue >= 0)
         {
             unsigned char* next =
@@ -5221,8 +5221,8 @@ static bool Phase3RangeReferencesAnyString(
                         pushedValue);
 
                 for (size_t i = 0;
-                     i < stringOffsets.size();
-                     ++i)
+                    i < stringOffsets.size();
+                    ++i)
                 {
                     if (stringOffsets[i] == value)
                         return true;
@@ -5258,25 +5258,25 @@ static bool ResolvePhase3SellStagePath(
     int qualifiedCount = 0;
 
     for (size_t functionIndex = 0;
-         functionIndex < functions.size();
-         ++functionIndex)
+        functionIndex < functions.size();
+        ++functionIndex)
     {
         const VmFunctionRange& function =
             functions[functionIndex];
 
         std::vector<Phase3DirectCall> calls;
         if (!CollectDirectCalls(
-                program,
-                function,
-                functions,
-                calls))
+            program,
+            function,
+            functions,
+            calls))
         {
             return false;
         }
 
         for (size_t callIndex = 0;
-             callIndex < calls.size();
-             ++callIndex)
+            callIndex < calls.size();
+            ++callIndex)
         {
             const Phase3DirectCall& call =
                 calls[callIndex];
@@ -5286,13 +5286,13 @@ static bool ResolvePhase3SellStagePath(
 
             std::vector<uint32_t> instructionPositions;
             for (uint32_t position = function.start;
-                 position < function.end;)
+                position < function.end;)
             {
                 uint32_t length = 0;
                 if (!GetVmInstructionLength(
-                        program,
-                        position,
-                        length))
+                    program,
+                    position,
+                    length))
                 {
                     return false;
                 }
@@ -5303,9 +5303,9 @@ static bool ResolvePhase3SellStagePath(
             }
 
             for (size_t instructionIndex = 0;
-                 instructionIndex
-                    < instructionPositions.size();
-                 ++instructionIndex)
+                instructionIndex
+                < instructionPositions.size();
+                ++instructionIndex)
             {
                 const uint32_t switchPosition =
                     instructionPositions[
@@ -5346,8 +5346,8 @@ static bool ResolvePhase3SellStagePath(
                 bool validSwitch = true;
 
                 for (uint32_t entry = 0;
-                     entry < caseCount;
-                     ++entry)
+                    entry < caseCount;
+                    ++entry)
                 {
                     const uint32_t entryPosition =
                         switchPosition + 2
@@ -5357,10 +5357,10 @@ static bool ResolvePhase3SellStagePath(
                     uint32_t relativeRaw = 0;
 
                     if (!ReadScriptUnsigned(
-                            program,
-                            entryPosition,
-                            4,
-                            caseValueRaw)
+                        program,
+                        entryPosition,
+                        4,
+                        caseValueRaw)
                         || !ReadScriptUnsigned(
                             program,
                             entryPosition + 4,
@@ -5383,11 +5383,11 @@ static bool ResolvePhase3SellStagePath(
                             relative);
 
                     if (target64
-                            < static_cast<int64_t>(
-                                function.start)
+                        < static_cast<int64_t>(
+                            function.start)
                         || target64
-                            >= static_cast<int64_t>(
-                                function.end))
+                        >= static_cast<int64_t>(
+                            function.end))
                     {
                         validSwitch = false;
                         break;
@@ -5410,20 +5410,20 @@ static bool ResolvePhase3SellStagePath(
                 }
 
                 for (size_t i = 0;
-                     i < cases.size();
-                     ++i)
+                    i < cases.size();
+                    ++i)
                 {
                     uint32_t blockEnd =
                         function.end;
 
                     for (size_t j = 0;
-                         j < cases.size();
-                         ++j)
+                        j < cases.size();
+                        ++j)
                     {
                         if (cases[j].target
-                                > cases[i].target
+                        > cases[i].target
                             && cases[j].target
-                                < blockEnd)
+                            < blockEnd)
                         {
                             blockEnd =
                                 cases[j].target;
@@ -5431,15 +5431,15 @@ static bool ResolvePhase3SellStagePath(
                     }
 
                     if (call.callPosition
-                            < cases[i].target
+                        < cases[i].target
                         || call.callPosition
-                            >= blockEnd)
+                        >= blockEnd)
                     {
                         continue;
                     }
 
                     if (call.callPosition
-                            - cases[i].target
+                        - cases[i].target
                         > 32U)
                     {
                         continue;
@@ -5447,10 +5447,10 @@ static bool ResolvePhase3SellStagePath(
 
                     uint32_t staticIndex = 0;
                     if (!TryGetPhase3SwitchStaticIndex(
-                            program,
-                            instructionPositions,
-                            instructionIndex,
-                            staticIndex))
+                        program,
+                        instructionPositions,
+                        instructionIndex,
+                        staticIndex))
                     {
                         continue;
                     }
@@ -5554,13 +5554,13 @@ static bool ResolvePhase3SellControlPath(
 
     std::vector<uint32_t> instructionPositions;
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         uint32_t length = 0;
         if (!GetVmInstructionLength(
-                program,
-                position,
-                length))
+            program,
+            position,
+            length))
         {
             Logf(
                 "[Phase3P] SellControl unresolved reason=parser-failed pc=0x%X",
@@ -5578,9 +5578,9 @@ static bool ResolvePhase3SellControlPath(
     int qualifiedCount = 0;
 
     for (size_t instructionIndex = 0;
-         instructionIndex
-            < instructionPositions.size();
-         ++instructionIndex)
+        instructionIndex
+        < instructionPositions.size();
+        ++instructionIndex)
     {
         const uint32_t switchPosition =
             instructionPositions[
@@ -5610,8 +5610,8 @@ static bool ResolvePhase3SellControlPath(
         bool foundCases[4]{};
 
         for (uint32_t entry = 0;
-             entry < 4;
-             ++entry)
+            entry < 4;
+            ++entry)
         {
             const uint32_t entryPosition =
                 switchPosition + 2
@@ -5621,10 +5621,10 @@ static bool ResolvePhase3SellControlPath(
             uint32_t relativeRaw = 0;
 
             if (!ReadScriptUnsigned(
-                    program,
-                    entryPosition,
-                    4,
-                    caseValue)
+                program,
+                entryPosition,
+                4,
+                caseValue)
                 || !ReadScriptUnsigned(
                     program,
                     entryPosition + 4,
@@ -5649,11 +5649,11 @@ static bool ResolvePhase3SellControlPath(
                     relative);
 
             if (target64
-                    >= static_cast<int64_t>(
-                        sellHandler.end)
+                >= static_cast<int64_t>(
+                    sellHandler.end)
                 || target64
-                    < static_cast<int64_t>(
-                        sellHandler.start))
+                < static_cast<int64_t>(
+                    sellHandler.start))
             {
                 continue;
             }
@@ -5683,8 +5683,8 @@ static bool ResolvePhase3SellControlPath(
         for (size_t i = 0; i < 4; ++i)
         {
             for (size_t j = i + 1;
-                 j < 4;
-                 ++j)
+                j < 4;
+                ++j)
             {
                 if (orderedTargets[j]
                     < orderedTargets[i])
@@ -5706,8 +5706,8 @@ static bool ResolvePhase3SellControlPath(
                     sellHandler.end;
 
                 for (size_t i = 0;
-                     i < 4;
-                     ++i)
+                    i < 4;
+                    ++i)
                 {
                     if (orderedTargets[i] > target)
                     {
@@ -5744,10 +5744,10 @@ static bool ResolvePhase3SellControlPath(
 
         uint32_t staticIndex = 0;
         if (!TryGetPhase3SwitchStaticIndex(
-                program,
-                instructionPositions,
-                instructionIndex,
-                staticIndex))
+            program,
+            instructionPositions,
+            instructionIndex,
+            staticIndex))
         {
             Logf(
                 "[Phase3P] SellControl candidate rejected switch=0x%X reason=input-static-unresolved",
@@ -6418,7 +6418,7 @@ static int GetPhase3GtacarsPurchasePrice(
 
         const uint32_t candidate =
             kPhase3GtacarsPrices[mid]
-                .modelHash;
+            .modelHash;
 
         if (candidate < target)
         {
@@ -6431,10 +6431,10 @@ static int GetPhase3GtacarsPurchasePrice(
     }
 
     if (low
-            < sizeof(kPhase3GtacarsPrices)
-                / sizeof(kPhase3GtacarsPrices[0])
+        < sizeof(kPhase3GtacarsPrices)
+        / sizeof(kPhase3GtacarsPrices[0])
         && kPhase3GtacarsPrices[low]
-            .modelHash == target)
+        .modelHash == target)
     {
         return kPhase3GtacarsPrices[low]
             .purchasePrice;
@@ -6493,9 +6493,9 @@ static const char* GetPhase3VehicleClassName(
 
     if (vehicleClass < 0
         || vehicleClass
-            >= static_cast<int>(
-                sizeof(kNames)
-                / sizeof(kNames[0])))
+        >= static_cast<int>(
+            sizeof(kNames)
+            / sizeof(kNames[0])))
     {
         return "Unknown";
     }
@@ -6536,9 +6536,9 @@ static int GetPhase3ClassMarketFloor(
 
     if (vehicleClass < 0
         || vehicleClass
-            >= static_cast<int>(
-                sizeof(kFloors)
-                / sizeof(kFloors[0])))
+        >= static_cast<int>(
+            sizeof(kFloors)
+            / sizeof(kFloors[0])))
     {
         return 30000;
     }
@@ -6638,8 +6638,8 @@ static int EstimatePhase3CustomizationRetailValue(
     int64_t total = 0;
 
     for (int slot = 0;
-         slot <= 48;
-         ++slot)
+        slot <= 48;
+        ++slot)
     {
 
         if (slot >= 17 && slot <= 22)
@@ -6749,7 +6749,7 @@ static bool EstimatePhase3VehicleSellPrice(
     {
         estimate.baseMarketValue =
             estimate.modelValue
-                > estimate.classMarketFloor
+        > estimate.classMarketFloor
             ? estimate.modelValue
             : estimate.classMarketFloor;
     }
@@ -6764,16 +6764,16 @@ static bool EstimatePhase3VehicleSellPrice(
     int64_t sellPrice =
         static_cast<int64_t>(
             estimate.baseMarketValue)
-            * static_cast<int64_t>(
-                g_vehicleSellPercent)
-            / 100LL;
+        * static_cast<int64_t>(
+            g_vehicleSellPercent)
+        / 100LL;
 
     sellPrice +=
         static_cast<int64_t>(
             estimate.customizationRetailValue)
-            * static_cast<int64_t>(
-                g_upgradePercent)
-            / 100LL;
+        * static_cast<int64_t>(
+            g_upgradePercent)
+        / 100LL;
 
     estimate.bodyHealth =
         VEHICLE::GET_VEHICLE_BODY_HEALTH(
@@ -6803,8 +6803,8 @@ static bool EstimatePhase3VehicleSellPrice(
 
         const float conditionHealth =
             bodyHealth < engineHealth
-                ? bodyHealth
-                : engineHealth;
+            ? bodyHealth
+            : engineHealth;
 
         int conditionPermille =
             static_cast<int>(
@@ -6866,8 +6866,8 @@ static void UpdatePhase3PreparedSellPrice()
         PLAYER::PLAYER_PED_ID();
 
     if (!PED::IS_PED_IN_ANY_VEHICLE(
-            playerPed,
-            false))
+        playerPed,
+        false))
     {
         ResetPhase3PreparedSellPrice();
         return;
@@ -6892,16 +6892,16 @@ static void UpdatePhase3PreparedSellPrice()
         && vehicle == g_phase3PreparedVehicle
         && model == g_phase3PreparedModel
         && g_phase3CurrentMenuState
-            == g_phase3PreparedMenuState)
+        == g_phase3PreparedMenuState)
     {
         return;
     }
 
     Phase3VehiclePriceEstimate estimate{};
     if (!EstimatePhase3VehicleSellPrice(
-            vehicle,
-            model,
-            estimate))
+        vehicle,
+        model,
+        estimate))
     {
         ResetPhase3PreparedSellPrice();
         return;
@@ -6975,8 +6975,8 @@ static void UpdatePhase3SellPriceFallback()
     {
         Phase2ThreadInfo threadInfo{};
         if (!GetPhase2ThreadInfo(
-                kCarmodShopHash,
-                threadInfo)
+            kCarmodShopHash,
+            threadInfo)
             || !threadInfo.stack)
         {
             return;
@@ -7006,7 +7006,7 @@ static void UpdatePhase3SellPriceFallback()
         reinterpret_cast<unsigned char*>(
             g_phase3PriceThreadInfo.stack)
         + static_cast<size_t>(index)
-            * sizeof(uintptr_t);
+        * sizeof(uintptr_t);
 
     uint64_t raw = 0;
     if (!IsReadableMemory(slot, sizeof(raw)))
@@ -7026,8 +7026,8 @@ static void UpdatePhase3SellPriceFallback()
         PLAYER::PLAYER_PED_ID();
 
     if (!PED::IS_PED_IN_ANY_VEHICLE(
-            playerPed,
-            false))
+        playerPed,
+        false))
     {
         return;
     }
@@ -7060,9 +7060,9 @@ static void UpdatePhase3SellPriceFallback()
         Phase3VehiclePriceEstimate estimate{};
 
         if (!EstimatePhase3VehicleSellPrice(
-                vehicle,
-                model,
-                estimate))
+            vehicle,
+            model,
+            estimate))
         {
             if (!g_phase3FallbackLogged)
             {
@@ -7116,8 +7116,8 @@ static void UpdatePhase3SellPriceFallback()
             estimate.dynamicSellPrice,
             finalPrice,
             estimate.gtacarsPurchasePrice > 0
-                ? "gtacars"
-                : "dynamic-fallback");
+            ? "gtacars"
+            : "dynamic-fallback");
 
         g_phase3FallbackLogged = true;
     }
@@ -7192,7 +7192,7 @@ static void UpdatePhase3SellControlStateFast()
 
     if (menuIndex >= g_phase3PriceThreadInfo.stackSize
         || controlIndex
-            >= g_phase3PriceThreadInfo.stackSize)
+        >= g_phase3PriceThreadInfo.stackSize)
     {
         g_phase3CurrentMenuState = -1;
         g_phase3SellControlState = -1;
@@ -7208,7 +7208,7 @@ static void UpdatePhase3SellControlStateFast()
     const unsigned char* menuSlot =
         stack
         + static_cast<size_t>(menuIndex)
-            * sizeof(uintptr_t);
+        * sizeof(uintptr_t);
 
     uint64_t menuRaw = 0;
     std::memcpy(
@@ -7225,13 +7225,13 @@ static void UpdatePhase3SellControlStateFast()
         == g_phase3SellStagePath.sellMenuValue;
 
     if (g_phase3CurrentMenuState
-            != g_phase3LastLoggedMenuState)
+        != g_phase3LastLoggedMenuState)
     {
         const bool crossedSellBoundary =
             g_phase3CurrentMenuState
-                == g_phase3SellStagePath.sellMenuValue
+            == g_phase3SellStagePath.sellMenuValue
             || g_phase3LastLoggedMenuState
-                == g_phase3SellStagePath.sellMenuValue;
+            == g_phase3SellStagePath.sellMenuValue;
 
         if (crossedSellBoundary)
         {
@@ -7240,8 +7240,8 @@ static void UpdatePhase3SellControlStateFast()
                 g_phase3CurrentMenuState,
                 g_phase3SellStagePath.sellMenuValue,
                 g_phase3SellStageActive
-                    ? "yes"
-                    : "no",
+                ? "yes"
+                : "no",
                 static_cast<unsigned int>(
                     menuIndex),
                 static_cast<unsigned long long>(
@@ -7282,7 +7282,7 @@ static void UpdatePhase3SellControlStateFast()
     const unsigned char* controlSlot =
         stack
         + static_cast<size_t>(controlIndex)
-            * sizeof(uintptr_t);
+        * sizeof(uintptr_t);
 
     uint64_t controlRaw = 0;
     std::memcpy(
@@ -7296,11 +7296,11 @@ static void UpdatePhase3SellControlStateFast()
 
     g_phase3SellControlState =
         value >= 0 && value <= 3
-            ? value
-            : -1;
+        ? value
+        : -1;
 
     if (g_phase3SellControlState
-            != g_phase3LastLoggedSellControlState)
+        != g_phase3LastLoggedSellControlState)
     {
         Logf(
             "[Phase3P] SellControl state=%d staticIndex=%u raw=0x%016llX",
@@ -7321,7 +7321,7 @@ static void UpdateSellCompletionController()
 {
     SellCompletion::Update(
         g_stockLscScopeActive
-            && g_carmodShopActive,
+        && g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
         g_phase3SellControlState);
@@ -7392,9 +7392,9 @@ static bool WritePhase3NativeHandlerSlot(
         reinterpret_cast<Phase3NativeHandler*>(program->nativeOffset);
 
     if (!IsReadableMemory(
-            table,
-            sizeof(Phase3NativeHandler)
-                * static_cast<size_t>(program->nativeCount)))
+        table,
+        sizeof(Phase3NativeHandler)
+        * static_cast<size_t>(program->nativeCount)))
     {
         return false;
     }
@@ -7403,10 +7403,10 @@ static bool WritePhase3NativeHandlerSlot(
 
     DWORD oldProtection = 0;
     if (!VirtualProtect(
-            slot,
-            sizeof(Phase3NativeHandler),
-            PAGE_EXECUTE_READWRITE,
-            &oldProtection))
+        slot,
+        sizeof(Phase3NativeHandler),
+        PAGE_EXECUTE_READWRITE,
+        &oldProtection))
     {
         Logf(
             "[Phase3Probe] VirtualProtect failed nativeIndex=%u error=%lu",
@@ -7435,7 +7435,7 @@ static void Phase3SellDisplayPriceRegisterHook(
 
     if (!original
         || original
-            == &Phase3SellDisplayPriceRegisterHook)
+        == &Phase3SellDisplayPriceRegisterHook)
     {
         return;
     }
@@ -7452,15 +7452,15 @@ static void Phase3SellDisplayPriceRegisterHook(
         && context->argCount >= 1
         && g_phase3SellPricePath.resolved
         && g_phase3SellPricePath.element0StaticIndex
-            < g_phase3PriceThreadInfo.stackSize)
+        < g_phase3PriceThreadInfo.stackSize)
     {
         unsigned char* expectedSlot =
             reinterpret_cast<unsigned char*>(
                 g_phase3PriceThreadInfo.stack)
             + static_cast<size_t>(
                 g_phase3SellPricePath
-                    .element0StaticIndex)
-                * sizeof(uintptr_t);
+                .element0StaticIndex)
+            * sizeof(uintptr_t);
 
         const uint64_t* rawArgs =
             reinterpret_cast<const uint64_t*>(
@@ -7485,7 +7485,7 @@ static void Phase3SellDisplayPriceRegisterHook(
 
             if (correctedPrice > 0
                 && correctedPrice
-                    != rockstarInitial)
+                != rockstarInitial)
             {
                 const int32_t corrected =
                     static_cast<int32_t>(
@@ -7516,22 +7516,22 @@ static bool InstallPhase3SellDisplayPriceHook(
     if (!program
         || !g_phase3SellPricePath.resolved
         || g_phase3SellPricePath.registerNativeIndex
-            == 0xFFFF
+        == 0xFFFF
         || g_phase3SellPricePath.registerNativeSite == 0
         || program->nativeCount <= 0
         || !program->nativeOffset
         || g_phase3SellPricePath.registerNativeIndex
-            >= static_cast<uint16_t>(
-                program->nativeCount))
+        >= static_cast<uint16_t>(
+            program->nativeCount))
     {
         return false;
     }
 
     if (g_phase3SellDisplayPriceHook.installed
         && g_phase3SellDisplayPriceHook.program
-            == program
+        == program
         && g_phase3SellDisplayPriceHook.nativeIndex
-            == g_phase3SellPricePath.registerNativeIndex)
+        == g_phase3SellPricePath.registerNativeIndex)
     {
         return true;
     }
@@ -7541,10 +7541,10 @@ static bool InstallPhase3SellDisplayPriceHook(
             program->nativeOffset);
 
     if (!IsReadableMemory(
-            table,
-            sizeof(Phase3NativeHandler)
-                * static_cast<size_t>(
-                    program->nativeCount)))
+        table,
+        sizeof(Phase3NativeHandler)
+        * static_cast<size_t>(
+            program->nativeCount)))
     {
         return false;
     }
@@ -7557,7 +7557,7 @@ static bool InstallPhase3SellDisplayPriceHook(
 
     if (!original
         || original
-            == &Phase3SellDisplayPriceRegisterHook)
+        == &Phase3SellDisplayPriceRegisterHook)
     {
         return false;
     }
@@ -7577,9 +7577,9 @@ static bool InstallPhase3SellDisplayPriceHook(
         return true;
 
     if (!WritePhase3NativeHandlerSlot(
-            program,
-            nativeIndex,
-            &Phase3SellDisplayPriceRegisterHook))
+        program,
+        nativeIndex,
+        &Phase3SellDisplayPriceRegisterHook))
     {
         g_phase3SellDisplayPriceHook =
             Phase3SellDisplayPriceHook{};
@@ -7606,7 +7606,7 @@ static void Phase3SellCooldownClockHook(
 
     if (!original
         || original
-            == &Phase3SellCooldownClockHook)
+        == &Phase3SellCooldownClockHook)
     {
         return;
     }
@@ -7632,13 +7632,13 @@ static void Phase3SellCooldownClockHook(
     uint32_t programCounter = 0;
     const size_t pcOffset =
         IsEnhancedEdition()
-            ? 0x1C
-            : 0x14;
+        ? 0x1C
+        : 0x14;
 
     if (!ReadMemoryValue(
-            g_phase3PriceThreadInfo.thread,
-            pcOffset,
-            programCounter)
+        g_phase3PriceThreadInfo.thread,
+        pcOffset,
+        programCounter)
         || !IsPhase3PcAtNativeSite(
             programCounter,
             g_phase3SellCooldownHook.nativeSite))
@@ -7655,9 +7655,9 @@ static void Phase3SellCooldownClockHook(
         int activeRemainingSeconds = 0;
 
         if (SellCompletion::
-                TryGetCooldownClockOverride(
-                    activeClockValue,
-                    activeRemainingSeconds))
+            TryGetCooldownClockOverride(
+                activeClockValue,
+                activeRemainingSeconds))
         {
             clockValue =
                 activeClockValue;
@@ -7690,24 +7690,24 @@ static bool InstallPhase3SellCooldownHook(
     if (!program
         || !g_phase3SellCooldownPath.resolved
         || g_phase3SellCooldownPath.clockNativeIndex
-            == 0xFFFF
+        == 0xFFFF
         || g_phase3SellCooldownPath.clockNativeSite
-            == 0
+        == 0
         || program->nativeCount <= 0
         || !program->nativeOffset
         || g_phase3SellCooldownPath.clockNativeIndex
-            >= static_cast<uint16_t>(
-                program->nativeCount))
+        >= static_cast<uint16_t>(
+            program->nativeCount))
     {
         return false;
     }
 
     if (g_phase3SellCooldownHook.installed
         && g_phase3SellCooldownHook.program
-            == program
+        == program
         && g_phase3SellCooldownHook.nativeIndex
-            == g_phase3SellCooldownPath
-                .clockNativeIndex)
+        == g_phase3SellCooldownPath
+        .clockNativeIndex)
     {
         return true;
     }
@@ -7717,24 +7717,24 @@ static bool InstallPhase3SellCooldownHook(
             program->nativeOffset);
 
     if (!IsReadableMemory(
-            table,
-            sizeof(Phase3NativeHandler)
-                * static_cast<size_t>(
-                    program->nativeCount)))
+        table,
+        sizeof(Phase3NativeHandler)
+        * static_cast<size_t>(
+            program->nativeCount)))
     {
         return false;
     }
 
     const uint16_t nativeIndex =
         g_phase3SellCooldownPath
-            .clockNativeIndex;
+        .clockNativeIndex;
 
     Phase3NativeHandler original =
         table[nativeIndex];
 
     if (!original
         || original
-            == &Phase3SellCooldownClockHook)
+        == &Phase3SellCooldownClockHook)
     {
         return false;
     }
@@ -7743,7 +7743,7 @@ static bool InstallPhase3SellCooldownHook(
         program;
     g_phase3SellCooldownHook.nativeSite =
         g_phase3SellCooldownPath
-            .clockNativeSite;
+        .clockNativeSite;
     g_phase3SellCooldownHook.nativeIndex =
         nativeIndex;
     g_phase3SellCooldownHook.original =
@@ -7755,9 +7755,9 @@ static bool InstallPhase3SellCooldownHook(
         return true;
 
     if (!WritePhase3NativeHandlerSlot(
-            program,
-            nativeIndex,
-            &Phase3SellCooldownClockHook))
+        program,
+        nativeIndex,
+        &Phase3SellCooldownClockHook))
     {
         g_phase3SellCooldownHook =
             Phase3SellCooldownHook{};
@@ -7789,11 +7789,11 @@ static void FlushPhase3SellCooldownGateEvent()
 
     const bool shouldLog =
         g_phase3CooldownLastLoggedRemainingSeconds
-            < 0
+        < 0
         || remaining == 0
         || remaining
-            <= g_phase3CooldownLastLoggedRemainingSeconds
-                - 30;
+        <= g_phase3CooldownLastLoggedRemainingSeconds
+        - 30;
 
     if (!shouldLog)
         return;
@@ -7821,19 +7821,19 @@ static bool ReactivateCachedStockLscPatches(
         || g_highValueSellPatchPosition == 0
         || g_sellOwnershipPatchBackups.empty()
         || g_phase3SellDisplayPriceHook.program
-            != program
+        != program
         || !g_phase3SellDisplayPriceHook.original
         || g_phase3SellCooldownHook.program
-            != program
+        != program
         || !g_phase3SellCooldownHook.original)
     {
         return false;
     }
 
     if (!WriteVmPatch(
-            program,
-            g_phase2PatchPosition,
-            g_phase2VisibilityPatch))
+        program,
+        g_phase2PatchPosition,
+        g_phase2VisibilityPatch))
     {
         return false;
     }
@@ -7845,9 +7845,9 @@ static bool ReactivateCachedStockLscPatches(
         WAIT(0);
 
     if (!WriteVmPatch(
-            program,
-            g_highValueSellPatchPosition,
-            g_highValueSellPatch))
+        program,
+        g_highValueSellPatchPosition,
+        g_highValueSellPatch))
     {
         RestoreStockLscPatches(
             "cached high-value reactivation rollback");
@@ -7869,14 +7869,14 @@ static bool ReactivateCachedStockLscPatches(
 
     size_t ownershipWritten = 0;
     for (;
-         ownershipWritten
-            < g_sellOwnershipPatchBackups.size();
-         ++ownershipWritten)
+        ownershipWritten
+        < g_sellOwnershipPatchBackups.size();
+        ++ownershipWritten)
     {
         if (!WriteVmPatch(
-                program,
-                g_sellOwnershipPatchBackups[
-                    ownershipWritten].position,
+            program,
+            g_sellOwnershipPatchBackups[
+                ownershipWritten].position,
                 ownershipPatch))
         {
             break;
@@ -7890,8 +7890,8 @@ static bool ReactivateCachedStockLscPatches(
         != g_sellOwnershipPatchBackups.size())
     {
         for (size_t i = 0;
-             i < ownershipWritten;
-             ++i)
+            i < ownershipWritten;
+            ++i)
         {
             WriteVmPatch(
                 program,
@@ -7907,9 +7907,9 @@ static bool ReactivateCachedStockLscPatches(
     g_sellOwnershipPatchApplied = true;
 
     if (!WritePhase3NativeHandlerSlot(
-            program,
-            g_phase3SellDisplayPriceHook.nativeIndex,
-            &Phase3SellDisplayPriceRegisterHook))
+        program,
+        g_phase3SellDisplayPriceHook.nativeIndex,
+        &Phase3SellDisplayPriceRegisterHook))
     {
         RestoreStockLscPatches(
             "cached display hook reactivation rollback");
@@ -7923,9 +7923,9 @@ static bool ReactivateCachedStockLscPatches(
         WAIT(0);
 
     if (!WritePhase3NativeHandlerSlot(
-            program,
-            g_phase3SellCooldownHook.nativeIndex,
-            &Phase3SellCooldownClockHook))
+        program,
+        g_phase3SellCooldownHook.nativeIndex,
+        &Phase3SellCooldownClockHook))
     {
         RestoreStockLscPatches(
             "cached cooldown hook reactivation rollback");
@@ -7963,9 +7963,9 @@ static void RestoreStockLscPatches(
         && g_phase3SellCooldownHook.original)
     {
         if (!WritePhase3NativeHandlerSlot(
-                g_phase3SellCooldownHook.program,
-                g_phase3SellCooldownHook.nativeIndex,
-                g_phase3SellCooldownHook.original))
+            g_phase3SellCooldownHook.program,
+            g_phase3SellCooldownHook.nativeIndex,
+            g_phase3SellCooldownHook.original))
         {
             restoreFailed = true;
             Logf(
@@ -7984,9 +7984,9 @@ static void RestoreStockLscPatches(
         && g_phase3SellDisplayPriceHook.original)
     {
         if (!WritePhase3NativeHandlerSlot(
-                g_phase3SellDisplayPriceHook.program,
-                g_phase3SellDisplayPriceHook.nativeIndex,
-                g_phase3SellDisplayPriceHook.original))
+            g_phase3SellDisplayPriceHook.program,
+            g_phase3SellDisplayPriceHook.nativeIndex,
+            g_phase3SellDisplayPriceHook.original))
         {
             restoreFailed = true;
             Logf(
@@ -8006,13 +8006,13 @@ static void RestoreStockLscPatches(
         bool ownershipRestored = true;
 
         for (size_t i = 0;
-             i < g_sellOwnershipPatchBackups.size();
-             ++i)
+            i < g_sellOwnershipPatchBackups.size();
+            ++i)
         {
             if (!WriteVmPatch(
-                    g_sellOwnershipPatchedProgram,
-                    g_sellOwnershipPatchBackups[i].position,
-                    g_sellOwnershipPatchBackups[i].original))
+                g_sellOwnershipPatchedProgram,
+                g_sellOwnershipPatchBackups[i].position,
+                g_sellOwnershipPatchBackups[i].original))
             {
                 ownershipRestored = false;
                 break;
@@ -8036,9 +8036,9 @@ static void RestoreStockLscPatches(
         && g_highValueSellPatchedProgram)
     {
         if (!WriteVmPatch(
-                g_highValueSellPatchedProgram,
-                g_highValueSellPatchPosition,
-                g_highValueSellOriginal))
+            g_highValueSellPatchedProgram,
+            g_highValueSellPatchPosition,
+            g_highValueSellOriginal))
         {
             restoreFailed = true;
             Logf(
@@ -8055,9 +8055,9 @@ static void RestoreStockLscPatches(
         && g_phase2PatchedProgram)
     {
         if (!WriteVmPatch(
-                g_phase2PatchedProgram,
-                g_phase2PatchPosition,
-                g_phase2OriginalCall))
+            g_phase2PatchedProgram,
+            g_phase2PatchPosition,
+            g_phase2OriginalCall))
         {
             restoreFailed = true;
             Logf(
@@ -8227,9 +8227,9 @@ static void Phase3HelperNetworkProbe(Phase3NativeCallContext* context)
     uint32_t programCounter = 0;
     const size_t pcOffset = IsEnhancedEdition() ? 0x1C : 0x14;
     if (!ReadMemoryValue(
-            g_phase3HelperTraceThread,
-            pcOffset,
-            programCounter))
+        g_phase3HelperTraceThread,
+        pcOffset,
+        programCounter))
     {
         return;
     }
@@ -8240,8 +8240,8 @@ static void Phase3HelperNetworkProbe(Phase3NativeCallContext* context)
             g_phase3HelperGateSites[i];
 
         if (!IsPhase3PcAtNativeSite(
-                programCounter,
-                helper.nativeSite))
+            programCounter,
+            helper.nativeSite))
         {
             continue;
         }
@@ -8291,7 +8291,7 @@ static void Phase3HelperNetworkProbe(Phase3NativeCallContext* context)
 
             if (secondaryIndex >= 0
                 && secondaryIndex
-                    < g_phase3NativeProbeProgram->localCount
+                < g_phase3NativeProbeProgram->localCount
                 && IsReadableMemory(
                     g_phase3NativeProbeProgram->localOffset + secondaryIndex,
                     sizeof(int64_t)))
@@ -8307,9 +8307,9 @@ static void Phase3HelperNetworkProbe(Phase3NativeCallContext* context)
             && primaryReadable
             && secondaryReadable
             && static_cast<int>(primaryValue)
-                == helper.expectedPrimaryState
+            == helper.expectedPrimaryState
             && static_cast<int>(secondaryValue)
-                == helper.expectedSecondaryState;
+            == helper.expectedSecondaryState;
 
         Logf(
             "[Phase3Helper] HIT sequence=%u ordinal=%u callSite=0x%X targetFunc=%d targetStart=0x%X networkSite=0x%X networkReturn=%s raw=0x%llX predicateDecoded=%s staticBase=%u primary=%s%lld expectedPrimary=%d stateIndex=%d secondary=%s%lld expectedSecondary=%d wouldMatchIgnoringNetwork=%s tick=%llu",
@@ -8320,8 +8320,8 @@ static void Phase3HelperNetworkProbe(Phase3NativeCallContext* context)
             helper.functionStart,
             helper.nativeSite,
             returnReadable
-                ? ((returnRaw & 0xFFULL) != 0 ? "true" : "false")
-                : "n/a",
+            ? ((returnRaw & 0xFFULL) != 0 ? "true" : "false")
+            : "n/a",
             static_cast<unsigned long long>(returnRaw),
             helper.predicateShapeDecoded ? "yes" : "no",
             static_cast<unsigned int>(helper.staticBaseIndex),
@@ -8373,8 +8373,8 @@ static void RunPhase3NativeProbe(
             && IsReadableMemory(
                 context->args,
                 sizeof(uint64_t)
-                    * static_cast<size_t>(
-                        contextArgCount < 4 ? contextArgCount : 4)))
+                * static_cast<size_t>(
+                    contextArgCount < 4 ? contextArgCount : 4)))
         {
             const uint64_t* rawArgs =
                 reinterpret_cast<const uint64_t*>(context->args);
@@ -8437,8 +8437,8 @@ static void RunPhase3NativeProbe(
         for (size_t i = 0; i < sizeof(g_phase3BitUpdateSites) / sizeof(g_phase3BitUpdateSites[0]); ++i)
         {
             if (IsPhase3PcAtNativeSite(
-                    threadInfo.programCounter,
-                    g_phase3BitUpdateSites[i]))
+                threadInfo.programCounter,
+                g_phase3BitUpdateSites[i]))
             {
                 matchedSite = g_phase3BitUpdateSites[i];
                 matchedRole = "bit/state update alternate";
@@ -8451,8 +8451,8 @@ static void RunPhase3NativeProbe(
         for (size_t i = 0; i < sizeof(g_phase3DelaySites) / sizeof(g_phase3DelaySites[0]); ++i)
         {
             if (IsPhase3PcAtNativeSite(
-                    threadInfo.programCounter,
-                    g_phase3DelaySites[i]))
+                threadInfo.programCounter,
+                g_phase3DelaySites[i]))
             {
                 matchedSite = g_phase3DelaySites[i];
                 matchedRole = "delay/yield action alternate";
@@ -8565,7 +8565,7 @@ static void RunPhase3NativeProbe(
         probe.expectedArgs > 0
         && g_lastVehicleSnapshot.valid
         && arg0Low
-            == static_cast<uint32_t>(g_lastVehicleSnapshot.vehicle);
+        == static_cast<uint32_t>(g_lastVehicleSnapshot.vehicle);
 
     uint64_t arg0Pointee = 0;
     bool arg0PointeeReadable = false;
@@ -8643,8 +8643,8 @@ static void RunPhase3NativeProbe(
         returnReadable ? "yes" : "no",
         static_cast<unsigned long long>(returnRaw),
         returnReadable
-            ? ((returnRaw & 0xFFULL) != 0 ? "true" : "false")
-            : "n/a",
+        ? ((returnRaw & 0xFFULL) != 0 ? "true" : "false")
+        : "n/a",
         static_cast<unsigned long long>(GetTickCount64()));
 }
 
@@ -8669,7 +8669,7 @@ static bool InstallPhase3SellGateProbes(
     std::vector<Phase3NativeSite> natives;
 
     for (uint32_t position = sellHandler.start;
-         position < sellHandler.end;)
+        position < sellHandler.end;)
     {
         unsigned char* opPtr = ScriptCodePointer(program, position);
         uint32_t length = 0;
@@ -8683,10 +8683,10 @@ static bool InstallPhase3SellGateProbes(
             uint16_t nativeIndex = 0;
 
             if (!ReadVmNativeSignature(
-                    program,
-                    position,
-                    packed,
-                    nativeIndex))
+                program,
+                position,
+                packed,
+                nativeIndex))
             {
                 return false;
             }
@@ -8717,7 +8717,7 @@ static bool InstallPhase3SellGateProbes(
     if (networkMatches != 1
         || networkPosition < 2
         || static_cast<size_t>(networkPosition + 20)
-            >= natives.size())
+        >= natives.size())
     {
         Logf(
             "[Phase3Probe] skipped reason=extended network native neighborhood not unique/complete matches=%d nativeCount=%u",
@@ -8853,7 +8853,7 @@ static bool InstallPhase3SellGateProbes(
         || !IsReadableMemory(
             program->nativeOffset,
             sizeof(Phase3NativeHandler)
-                * static_cast<size_t>(program->nativeCount)))
+            * static_cast<size_t>(program->nativeCount)))
     {
         Logf(
             "[Phase3Probe] skipped reason=invalid native table");
@@ -8896,10 +8896,10 @@ static bool InstallPhase3SellGateProbes(
         {
             uint32_t target = 0;
             if (ReadScriptUnsigned(
-                    program,
-                    helperScan + 1,
-                    3,
-                    target))
+                program,
+                helperScan + 1,
+                3,
+                target))
             {
                 const VmFunctionRange* targetFunction =
                     FindVmFunctionByStart(
@@ -8919,13 +8919,13 @@ static bool InstallPhase3SellGateProbes(
                     if (networkRefs == 1
                         && networkSites.size() == 1
                         && g_phase3HelperGateSiteCount
-                            < sizeof(g_phase3HelperGateSites)
-                                / sizeof(g_phase3HelperGateSites[0]))
+                        < sizeof(g_phase3HelperGateSites)
+                        / sizeof(g_phase3HelperGateSites[0]))
                     {
                         bool duplicateNativeSite = false;
                         for (size_t existing = 0;
-                             existing < g_phase3HelperGateSiteCount;
-                             ++existing)
+                            existing < g_phase3HelperGateSiteCount;
+                            ++existing)
                         {
                             if (g_phase3HelperGateSites[existing].nativeSite
                                 == networkSites[0])
@@ -9003,7 +9003,7 @@ static bool InstallPhase3SellGateProbes(
             continue;
 
         for (uint32_t helperPc = targetFunction->start;
-             helperPc < targetFunction->end;)
+            helperPc < targetFunction->end;)
         {
             uint32_t helperLength = 0;
             unsigned char* helperOp =
@@ -9096,14 +9096,14 @@ static bool InstallPhase3SellGateProbes(
 
     if (g_phase3HelperGateSiteCount > 0
         && g_phase2NetworkGameNativeIndex
-            < static_cast<uint16_t>(program->nativeCount))
+        < static_cast<uint16_t>(program->nativeCount))
     {
         g_phase3HelperNetworkOriginal =
             table[g_phase2NetworkGameNativeIndex];
 
         if (g_phase3HelperNetworkOriginal
             && g_phase3HelperNetworkOriginal
-                != &Phase3HelperNetworkProbe
+            != &Phase3HelperNetworkProbe
             && WritePhase3NativeHandlerSlot(
                 program,
                 g_phase2NetworkGameNativeIndex,
@@ -9152,7 +9152,7 @@ static bool InstallPhase3SellGateProbes(
 static void UpdatePhase3Diagnostics()
 {
     if ((!g_stockLscScopeActive
-            && !g_prepareStructuralCacheOnly)
+        && !g_prepareStructuralCacheOnly)
         || !g_phase3Enabled
         || g_lastNetworkGame
         || (!g_phase2PatchApplied
@@ -9194,8 +9194,8 @@ static void UpdatePhase3Diagnostics()
     else
     {
         if (!BuildVmFunctionCatalog(
-                program,
-                functions))
+            program,
+            functions))
         {
             Logf(
                 "[Phase3] Diagnostics failed safely: function catalog failed");
@@ -9560,7 +9560,7 @@ static bool InitializeStructuralCacheAtStartup()
     ULONGLONG nextRequestAt = 0;
 
     while (!HasScriptLoadedByHash(
-                kCarmodShopHash))
+        kCarmodShopHash))
     {
         const ULONGLONG now =
             GetTickCount64();
@@ -9589,8 +9589,8 @@ static bool InitializeStructuralCacheAtStartup()
     static constexpr int kStartupStructuralAttempts = 3;
 
     for (int attempt = 1;
-         attempt <= kStartupStructuralAttempts;
-         ++attempt)
+        attempt <= kStartupStructuralAttempts;
+        ++attempt)
     {
         PrepareStructuralCache();
 
@@ -9970,8 +9970,8 @@ static void EndCarmodShopSession()
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG elapsed =
         now >= g_shopSessionStartedAt
-            ? now - g_shopSessionStartedAt
-            : 0ULL;
+        ? now - g_shopSessionStartedAt
+        : 0ULL;
 
     Logf(
         "[ShopSession] END session=%u elapsedMs=%llu gameTimer=%d",
