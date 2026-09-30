@@ -42,6 +42,8 @@ namespace
     static constexpr ULONGLONG kFadeOutTimeoutMs = 1500ULL;
     static constexpr ULONGLONG kDetachTimeoutMs = 250ULL;
     static constexpr ULONGLONG kBlackHoldMs = 150ULL;
+    static constexpr ULONGLONG kCashHudDisplayMs = 5000ULL;
+    static constexpr int kHudComponentCash = 3;
 
     static SellCompletion::LogCallback g_logger = nullptr;
     static CompletionState g_state = CompletionState::Idle;
@@ -54,6 +56,7 @@ namespace
     static Hash g_saleCashStat = 0;
     static const char* g_saleAccountName = nullptr;
     static bool g_payoutApplied = false;
+    static ULONGLONG g_cashHudUntil = 0;
 
     static Vehicle g_soldVehicle = 0;
     static Ped g_playerPed = 0;
@@ -244,6 +247,9 @@ namespace
         }
 
         g_payoutApplied = true;
+        g_cashHudUntil =
+            GetTickCount64()
+            + kCashHudDisplayMs;
 
         Log(
             "payout deposited account=%s requested=%d credited=%d balanceBefore=%d balanceAfter=%d",
@@ -256,6 +262,21 @@ namespace
             verifiedBalance);
 
         return true;
+    }
+
+    static void UpdateCashHud(
+        ULONGLONG now)
+    {
+        if (g_cashHudUntil == 0
+            || now >= g_cashHudUntil)
+        {
+            return;
+        }
+
+        // Keep GTA's native Story Mode cash balance visible alongside the
+        // normal cash-change notification after a completed vehicle sale.
+        UI::SHOW_HUD_COMPONENT_THIS_FRAME(
+            kHudComponentCash);
     }
 
     static void ClearSellContext()
@@ -559,6 +580,7 @@ namespace SellCompletion
     {
         ClearSellContext();
         ResetCompletionState();
+        g_cashHudUntil = 0;
     }
 
     void Update(
@@ -570,6 +592,7 @@ namespace SellCompletion
         const ULONGLONG now =
             GetTickCount64();
 
+        UpdateCashHud(now);
         UpdateCompletionState(now);
 
         if (g_state != CompletionState::Idle)
