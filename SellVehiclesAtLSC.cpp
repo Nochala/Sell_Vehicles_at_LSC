@@ -7942,6 +7942,129 @@ static void FlushPhase3SellCooldownGateEvent()
         g_phase3CooldownGateClockValue);
 }
 
+static bool ReactivateCachedStockLscPatches(
+    Phase2ScrProgram* program)
+{
+    if (!g_structuralCacheReady
+        || !program
+        || program != g_phase2PatchedProgram
+        || program != g_phase3AnalyzedProgram
+        || program != g_highValueSellPatchedProgram
+        || program != g_sellOwnershipPatchedProgram
+        || g_phase2PatchPosition == 0
+        || g_highValueSellPatchPosition == 0
+        || g_sellOwnershipPatchBackups.empty()
+        || g_phase3SellDisplayPriceHook.program
+            != program
+        || !g_phase3SellDisplayPriceHook.original
+        || g_phase3SellCooldownHook.program
+            != program
+        || !g_phase3SellCooldownHook.original)
+    {
+        return false;
+    }
+
+    if (!WriteVmPatch(
+            program,
+            g_phase2PatchPosition,
+            g_phase2VisibilityPatch))
+    {
+        return false;
+    }
+
+    g_phase2PatchApplied = true;
+    g_phase2VisibilityBypassActive = true;
+
+    if (!WriteVmPatch(
+            program,
+            g_highValueSellPatchPosition,
+            g_highValueSellPatch))
+    {
+        RestoreStockLscPatches(
+            "cached high-value reactivation rollback");
+        return false;
+    }
+
+    g_highValueSellPatchApplied = true;
+
+    const unsigned char ownershipPatch[4] =
+    {
+        kVmDrop,
+        kVmPushConst1,
+        kVmNop,
+        kVmNop
+    };
+
+    size_t ownershipWritten = 0;
+    for (;
+         ownershipWritten
+            < g_sellOwnershipPatchBackups.size();
+         ++ownershipWritten)
+    {
+        if (!WriteVmPatch(
+                program,
+                g_sellOwnershipPatchBackups[
+                    ownershipWritten].position,
+                ownershipPatch))
+        {
+            break;
+        }
+    }
+
+    if (ownershipWritten
+        != g_sellOwnershipPatchBackups.size())
+    {
+        for (size_t i = 0;
+             i < ownershipWritten;
+             ++i)
+        {
+            WriteVmPatch(
+                program,
+                g_sellOwnershipPatchBackups[i].position,
+                g_sellOwnershipPatchBackups[i].original);
+        }
+
+        RestoreStockLscPatches(
+            "cached ownership reactivation rollback");
+        return false;
+    }
+
+    g_sellOwnershipPatchApplied = true;
+
+    if (!WritePhase3NativeHandlerSlot(
+            program,
+            g_phase3SellDisplayPriceHook.nativeIndex,
+            &Phase3SellDisplayPriceRegisterHook))
+    {
+        RestoreStockLscPatches(
+            "cached display hook reactivation rollback");
+        return false;
+    }
+
+    g_phase3SellDisplayPriceHook.installed =
+        true;
+
+    if (!WritePhase3NativeHandlerSlot(
+            program,
+            g_phase3SellCooldownHook.nativeIndex,
+            &Phase3SellCooldownClockHook))
+    {
+        RestoreStockLscPatches(
+            "cached cooldown hook reactivation rollback");
+        return false;
+    }
+
+    g_phase3SellCooldownHook.installed =
+        true;
+
+    ApplyCharacterVehicleSettingForShop();
+
+    Logf(
+        "[Performance] cached LSC patch set reactivated without structural scan");
+
+    return true;
+}
+
 static void RestoreStockLscPatches(
     const char* reason)
 {
@@ -7973,8 +8096,8 @@ static void RestoreStockLscPatches(
         }
         else
         {
-            g_phase3SellCooldownHook =
-                Phase3SellCooldownHook{};
+            g_phase3SellCooldownHook.installed =
+                false;
         }
     }
 
@@ -7994,8 +8117,8 @@ static void RestoreStockLscPatches(
         }
         else
         {
-            g_phase3SellDisplayPriceHook =
-                Phase3SellDisplayPriceHook{};
+            g_phase3SellDisplayPriceHook.installed =
+                false;
         }
     }
 
@@ -8028,9 +8151,6 @@ static void RestoreStockLscPatches(
         else
         {
             g_sellOwnershipPatchApplied = false;
-            g_sellOwnershipPatchedProgram = nullptr;
-            g_sellOwnershipPatchPositions.clear();
-            g_sellOwnershipPatchBackups.clear();
         }
     }
 
@@ -8050,12 +8170,6 @@ static void RestoreStockLscPatches(
         else
         {
             g_highValueSellPatchApplied = false;
-            g_highValueSellPatchedProgram = nullptr;
-            g_highValueSellPatchPosition = 0;
-            std::memset(
-                g_highValueSellOriginal,
-                0,
-                sizeof(g_highValueSellOriginal));
         }
     }
 
@@ -8076,38 +8190,20 @@ static void RestoreStockLscPatches(
         {
             g_phase2PatchApplied = false;
             g_phase2VisibilityBypassActive = false;
-            g_phase2PatchedProgram = nullptr;
-            g_phase2PatchPosition = 0;
         }
     }
 
     if (restoreFailed)
         return;
 
-    // Force fresh structural validation next time the player approaches an
-    // actual Los Santos Customs. No patched state is carried to other garages.
-    g_phase2AttemptedProgram = nullptr;
-    g_phase2NetworkGameNativeIndex = 0xFFFF;
-    g_phase3AnalyzedProgram = nullptr;
-    g_phase3FunctionCatalog.clear();
-    g_phase3SellHandler = VmFunctionRange{};
-    g_phase3SellHandlerResolved = false;
-    g_phase3SellEligibilityFunction =
-        VmFunctionRange{};
-    g_phase3NoSell1MessagePush = 0;
-    g_phase3PlayerOwnedHelper =
-        VmFunctionRange{};
-    g_phase3SellPricePath =
-        Phase3SellPricePath{};
-    g_phase3SellCooldownPath =
-        Phase3SellCooldownPath{};
-    g_phase3SellControlPath =
-        Phase3SellControlPath{};
-    g_phase3SellStagePath =
-        Phase3SellStagePath{};
+    // Keep the validated structural cache. Only runtime/session state is
+    // cleared here, so the next LSC approach requires a few direct writes
+    // instead of rebuilding the entire ScriptVM function/string catalog.
     g_phase3PriceThreadInfo =
         Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
+    g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase3ControlUpdateAt = 0;
     g_phase3CooldownGateEventPending = false;
     g_phase3CooldownGateClockValue = 0;
     g_phase3CooldownGateRemainingSeconds = 0;
