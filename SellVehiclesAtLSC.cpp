@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.16 Phase 3N native Sell price display";
+static const char* kBuildTag = "v0.3.17 Phase 3O post-sale cash HUD";
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -8674,7 +8674,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles, applies the 60%% resale basis plus 50%% of estimated installed upgrade value, and injects that final value into Rockstar's registered iOptionCost[0] before the native Sell menu composes its ITEM_COST text. Missing/newer/add-on models use the class/model fallback.");
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, and credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes.");
+    Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
