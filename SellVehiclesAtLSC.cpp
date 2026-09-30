@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.22 LSC-only clean logging";
+static const char* kBuildTag = "v0.3.23 cached LSC patching";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -81,6 +81,12 @@ static bool g_rootMarkerSet = false;
 static int g_inferredMenuDepth = -1;
 static uint32_t g_inputSequence = 0;
 static bool g_stockLscScopeActive = false;
+static ULONGLONG g_nextStockLscScopeCheckAt = 0;
+static ULONGLONG g_nextPhase3ControlUpdateAt = 0;
+static bool g_prepareStructuralCacheOnly = false;
+static constexpr ULONGLONG kStockLscScopePollOutsideMs = 250ULL;
+static constexpr ULONGLONG kStockLscScopePollInsideMs = 100ULL;
+static constexpr ULONGLONG kPhase3ControlUpdateIntervalMs = 16ULL;
 
 struct StockLscPoint
 {
@@ -746,6 +752,7 @@ static Phase2ScrProgram* g_highValueSellPatchedProgram = nullptr;
 static uint32_t g_highValueSellPatchPosition = 0;
 static bool g_highValueSellPatchApplied = false;
 static unsigned char g_highValueSellOriginal[4]{};
+static unsigned char g_highValueSellPatch[4]{};
 
 static VmFunctionRange g_phase3SellEligibilityFunction{};
 static uint32_t g_phase3NoSell1MessagePush = 0;
@@ -2233,6 +2240,10 @@ static void UpdatePhase2SellExposure()
                     g_highValueSellOriginal,
                     0,
                     sizeof(g_highValueSellOriginal));
+                std::memset(
+                    g_highValueSellPatch,
+                    0,
+                    sizeof(g_highValueSellPatch));
             }
 
             if (program != g_sellOwnershipPatchedProgram)
@@ -3530,6 +3541,10 @@ static bool ApplyHighValueSellRestrictionPatch(
         g_highValueSellOriginal,
         original,
         sizeof(g_highValueSellOriginal));
+    std::memcpy(
+        g_highValueSellPatch,
+        patch,
+        sizeof(g_highValueSellPatch));
     g_highValueSellPatchApplied = true;
 
     Logf(
