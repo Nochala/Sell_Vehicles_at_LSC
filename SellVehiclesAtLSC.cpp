@@ -1923,6 +1923,10 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         return false;
     }
 
+    // Phase 3 consumes the same carmod_shop function boundaries. Cache the
+    // catalog here so structural discovery never parses the whole VM twice.
+    g_phase3FunctionCatalog = functions;
+
     VmFunctionRange visibility{};
     VmFunctionRange sellFilter{};
     uint32_t callPosition = 0;
@@ -9329,13 +9333,24 @@ static void UpdatePhase3Diagnostics()
     }
 
     std::vector<VmFunctionRange> functions;
-    if (!BuildVmFunctionCatalog(program, functions))
-    {
-        Logf("[Phase3] Diagnostics failed safely: function catalog failed");
-        return;
-    }
 
-    g_phase3FunctionCatalog = functions;
+    if (!g_phase3FunctionCatalog.empty())
+    {
+        functions = g_phase3FunctionCatalog;
+    }
+    else
+    {
+        if (!BuildVmFunctionCatalog(
+                program,
+                functions))
+        {
+            Logf(
+                "[Phase3] Diagnostics failed safely: function catalog failed");
+            return;
+        }
+
+        g_phase3FunctionCatalog = functions;
+    }
 
     Logf(
         "[Phase3] Diagnostics begin program=%p networkGameNativeIndex=%u stringSize=%d",
@@ -9394,8 +9409,18 @@ static void UpdatePhase3Diagnostics()
             sellHandler,
             playerOwnedHelper);
 
-    LogPhase3FunctionOutline(program, sellHandler, functions);
-    LogPhase3FocusedSellBytecode(program, sellHandler, functions);
+    if (g_debugLogActive)
+    {
+        LogPhase3FunctionOutline(
+            program,
+            sellHandler,
+            functions);
+        LogPhase3FocusedSellBytecode(
+            program,
+            sellHandler,
+            functions);
+    }
+
     ResolvePhase3SellPricePath(
         program,
         sellHandler,
@@ -10055,12 +10080,9 @@ static void PollScriptStates()
 {
     bool carmodShopNowActive = false;
 
-    // carmod_shop is the only probe needed to maintain active-session state.
-    // Once it is running, do not keep querying the six unrelated diagnostic
-    // scripts every poll; that work is useful for discovery logs but not for
-    // the live Sell path.
+    // carmod_shop is the only runtime script probe.
     const size_t probeCount =
-        g_carmodShopActive ? 1 : kScriptProbeCount;
+        kScriptProbeCount;
 
     for (size_t i = 0; i < probeCount; ++i)
     {
