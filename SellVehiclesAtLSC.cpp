@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.27 enhanced ownership disambiguation";
+static const char* kBuildTag = "v1.0.0";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -369,8 +369,6 @@ static void Logf(const char* format, ...)
         return;
     }
 
-    // Before a failure, keep diagnostics in memory only. If the history fills,
-    // discard the older successful trace and retain the newest context.
     if (!g_debugLogActive
         && g_logBufferUsed
             > kLogBufferCapacity - lineLength)
@@ -594,7 +592,6 @@ static const char* GetEditionName()
     return "Unknown";
 }
 
-
 struct Phase2ScrProgram
 {
     char pad0[16];
@@ -751,9 +748,6 @@ struct Phase3NativeProbe
     uint32_t matchedCalls;
     uint32_t unmatchedInSellLogged;
 
-    // Phase 3F: keep the synchronous native hooks cheap. Rockstar can execute
-    // these sites every frame while the Sell UI is open, so only emit a MATCH
-    // line when the observed state actually changes.
     bool hasLoggedState;
     uint32_t lastLoggedSite;
     uint32_t lastLoggedContextArgCount;
@@ -780,9 +774,6 @@ struct Phase3HelperGateSite
     uint32_t nativeSite;
     int functionIndex;
 
-    // Phase 3I: decoded Online-side predicate shape. The helper first checks
-    // NETWORK_IS_GAME_IN_PROGRESS, then tests one script static against 45 and
-    // a second static (base + signed offset) against a helper-specific state.
     uint16_t staticBaseIndex;
     int16_t staticStateOffset;
     int expectedPrimaryState;
@@ -1737,8 +1728,6 @@ static bool ValidateSellFilterShape(
             if (!ReadVmNativeSignature(program, position, packed, index))
                 return false;
 
-            // NETWORK_IS_GAME_IN_PROGRESS takes zero arguments and returns one
-            // value. The Sell filter calls it twice right at the start.
             if (packed == 0x01)
             {
                 if (!firstNativeSeen)
@@ -1787,10 +1776,7 @@ static bool FindSellVisibilityCall(
 
         for (size_t i = 2; i + 2 < conditions.size(); ++i)
         {
-            // Rockstar's category-availability chain around Sell is:
-            // ... 55, 31, 42, 47, 27 ...
-            // Matching the neighboring parameter comparisons avoids relying on
-            // decompiler function numbers or on a generic constant-42 search.
+
             if (conditions[i - 2].value != 55
                 || conditions[i - 1].value != 31
                 || conditions[i].value != 42
@@ -1897,9 +1883,6 @@ static bool WriteVmPatch(
 
     std::memcpy(address, patch, 4);
 
-    // ScriptVM bytecode is interpreted as data rather than executed directly
-    // by the CPU. Flushing the process instruction cache for every 4-byte VM
-    // edit only adds synchronization overhead during LSC scope transitions.
     DWORD ignored = 0;
     VirtualProtect(address, 4, oldProtection, &ignored);
 
@@ -1931,8 +1914,6 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         return false;
     }
 
-    // Phase 3 consumes the same carmod_shop function boundaries. Cache the
-    // catalog here so structural discovery never parses the whole VM twice.
     g_phase3FunctionCatalog = functions;
 
     VmFunctionRange visibility{};
@@ -1987,10 +1968,6 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         original,
         sizeof(g_phase2OriginalCall));
 
-    // The structurally resolved Sell filter takes one vehicle argument and
-    // returns one bool. Replacing only this call with DROP + false keeps the
-    // VM stack balanced while bypassing the Story Mode hide decision for
-    // category 42 alone.
     const unsigned char patch[4] =
     {
         kVmDrop, kVmPushConst0, kVmNop, kVmNop
@@ -2104,9 +2081,6 @@ static bool IsRockstarCharacterVehicle(
     const Hash model =
         ENTITY::GET_ENTITY_MODEL(vehicle);
 
-    // Rockstar's SP player vehicle data identifies the protagonist vehicles
-    // with model + fixed plate combinations. Using both avoids blocking an
-    // ordinary traffic vehicle merely because it shares the same model.
     if (model == Joaat("tailgater"))
         return PlateTextEquals(vehicle, "5MDS003");
 
@@ -2185,9 +2159,7 @@ static void ApplyCharacterVehicleSettingForShop()
             playerPed,
             false))
     {
-        // Fail open for ordinary LSC behavior if no current vehicle can be
-        // identified. This also repairs a stale hidden state from a previous
-        // session if restoring the patch had failed for any reason.
+
         SetPhase2SellVisibilityBypass(
             true,
             "no current shop vehicle");
@@ -2248,9 +2220,6 @@ static void UpdatePhase2SellExposure()
     g_nextPhase2ProgramCheckAt =
         now + 1000ULL;
 
-    // The entire Sell structure is resolved and cached during startup.
-    // Never scan the ScriptVM, rebuild catalogs, search strings, or rediscover
-    // carmod_shop while entering the vicinity of LSC.
     Phase2ScrProgram* program =
         g_phase2PatchedProgram;
 
@@ -2272,11 +2241,9 @@ static void UpdatePhase2SellExposure()
         return;
     }
 
-    // Cached reactivation failure is a genuine runtime/compatibility failure.
-    // Do not fall back to structural discovery near LSC.
     g_structuralCacheReady = false;
     Logf(
-        "[Performance] cached LSC patch reactivation failed; vicinity rediscovery disabled");
+        "[Runtime] cached LSC activation failed; structural rediscovery remains disabled");
 }
 
 static bool ValidateProgramStrings(Phase2ScrProgram* program)
@@ -3670,11 +3637,7 @@ static bool ResolvePhase3PlayerOwnedHelper(
         && sellLinkedCandidates == 1
         && soleSellLinkedCandidate.found)
     {
-        // Enhanced currently contains another one-argument helper that also
-        // references Player_Vehicle and NETWORK_IS_GAME_IN_PROGRESS. The real
-        // Sell ownership helper is the only candidate called directly by the
-        // structurally resolved Sell handler. Legacy also satisfies this
-        // relationship, so this remains structural rather than build-specific.
+
         playerOwnedHelper =
             soleSellLinkedCandidate;
 
@@ -4362,7 +4325,6 @@ static Phase3NativeProbe g_phase3NativeProbes[] =
 static constexpr size_t kPhase3NativeProbeCount =
     sizeof(g_phase3NativeProbes) / sizeof(g_phase3NativeProbes[0]);
 
-
 static bool MatchSellPriceArraySequence(
     Phase2ScrProgram* program,
     uint32_t position,
@@ -4590,11 +4552,6 @@ static bool ResolvePhase3SellPricePath(
     uint16_t registerNativeIndex = 0xFFFF;
     int registerNativeMatches = 0;
 
-    // Rockstar registers sData.iOptionCost[0] immediately after assigning the
-    // Sell value and before composing the visible ITEM_COST text. Resolve that
-    // exact SECURITY::REGISTER_SCRIPT_VARIABLE use by matching the same
-    // iOptionCost[0] address expression followed by a one-argument/zero-return
-    // NATIVE. No native hash or build-specific native index is hardcoded.
     for (uint32_t position = sellHandler.start;
          position < itemCostPush;)
     {
@@ -5101,15 +5058,6 @@ static bool TryGetPhase3SwitchStaticIndex(
         return false;
     }
 
-    // The value feeding SWITCH must be immediately before it. Decode that
-    // expression backwards instead of grabbing only the final IOFFSET load.
-    //
-    // Example from Legacy build 93 DO_STAGE_SELL:
-    //   STATIC_U16       0x02F1  (753)
-    //   IOFFSET_U8       0x77     (+119)
-    //   IOFFSET_U8_LOAD  0x05     (+5)
-    //   SWITCH
-    // The correct iControl slot is therefore 877, not 758.
     int64_t accumulatedOffset = 0;
     bool sawOffsetExpression = false;
 
@@ -5132,7 +5080,6 @@ static bool TryGetPhase3SwitchStaticIndex(
         if (!op)
             return false;
 
-        // Direct static load feeding SWITCH.
         if (!sawOffsetExpression
             && (*op == 0x50
                 || *op == 0x5F))
@@ -5151,8 +5098,6 @@ static bool TryGetPhase3SwitchStaticIndex(
             return true;
         }
 
-        // Address-offset and address-offset-load instructions all contribute
-        // to the final static address. Keep walking until the STATIC base.
         if (*op == 0x40
             || *op == 0x41)
         {
@@ -5223,13 +5168,9 @@ static bool TryGetPhase3SwitchStaticIndex(
             return true;
         }
 
-        // Once an offset expression has started, any unrelated opcode means
-        // this is not the simple static-address chain we require.
         if (sawOffsetExpression)
             return false;
 
-        // Before the expression starts, do not wander arbitrarily far through
-        // unrelated stack operations.
         return false;
     }
 
@@ -5390,9 +5331,6 @@ static bool ResolvePhase3SellStagePath(
                     static_cast<uint32_t>(
                         *countPtr);
 
-                // The main carmod menu dispatch has many cases. Requiring a
-                // reasonably large switch prevents a nested state machine from
-                // being mistaken for the eMenu dispatcher.
                 if (caseCount < 16)
                     continue;
 
@@ -5500,9 +5438,6 @@ static bool ResolvePhase3SellStagePath(
                         continue;
                     }
 
-                    // DO_STAGE_SELL is dispatched directly from CMM_SELL.
-                    // The call should be very near the case entry; this also
-                    // prevents an outer switch from accidentally qualifying.
                     if (call.callPosition
                             - cases[i].target
                         > 32U)
@@ -5706,11 +5641,6 @@ static bool ResolvePhase3SellControlPath(
                 static_cast<int16_t>(
                     relativeRaw & 0xFFFFU);
 
-            // GTA V SWITCH cases are six-byte entries:
-            //   u32 caseValue + s16 relativeOffset
-            // The jump base is the byte immediately after that entire entry.
-            // Previous builds incorrectly used entryPosition + 5, which put
-            // every resolved case target one byte before the real opcode.
             const int64_t target64 =
                 static_cast<int64_t>(
                     entryPosition)
@@ -5873,604 +5803,601 @@ struct Phase3GtacarsPriceEntry
     int purchasePrice;
 };
 
-// GTACars-derived native GTA 5/Online acquisition-price reference.
-// The table is keyed by the actual GTA model hash for O(log n) lookup.
-// Missing/newer models safely fall back to the dynamic class/model estimator.
 static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
 {
-    { 0x00675ED7U, 210000 }, // chimera
-    { 0x00ABB0C0U, 40000 }, // carbonrs
-    { 0x00E83C17U, 535000 }, // hermes
-    { 0x00FDFFB0U, 165000 }, // virgo3
-    { 0x0239E390U, 90000 }, // hotknife
-    { 0x0350D1ABU, 5000 }, // faggio2
-    { 0x03E5F6B8U, 16000 }, // youga
-    { 0x0409D787U, 700000 }, // yosemite3
-    { 0x047A6BC1U, 200000 }, // glendale
-    { 0x04CE68ACU, 35000 }, // dominator
-    { 0x04F48FC4U, 1175000 }, // rebla
-    { 0x05283265U, 95000 }, // bf400
-    { 0x05852838U, 51000 }, // kalahari
-    { 0x0612F4B6U, 550000 }, // trophytruck
-    { 0x067BC037U, 138000 }, // coquette
-    { 0x06FF6914U, 750000 }, // btype
-    { 0x097E5533U, 1150000 }, // ardent
-    { 0x09D80F93U, 1700000 }, // miljet
-    { 0x0A90ED5CU, 1225000 }, // phantom3
-    { 0x0BBA2261U, 904000 }, // elegy
-    { 0x0D4E5F4DU, 865000 }, // cheetah2
-    { 0x0D4EA603U, 490000 }, // sabregt2
-    { 0x0DC60D2BU, 325000 }, // speeder
-    { 0x0DF381E5U, 1595000 }, // reaper
-    { 0x0E2C013EU, 535000 }, // buffalo3
-    { 0x1044926FU, 1329000 }, // tempesta
-    { 0x1149422FU, 22000 }, // tropic
-    { 0x11962E49U, 3870000 }, // annihilator2
-    { 0x11AA0E14U, 864500 }, // gburrito2
-    { 0x11CBC051U, 192000 }, // verus
-    { 0x11F58A5AU, 670000 }, // stryder
-    { 0x11F76C14U, 15000 }, // hexer
-    { 0x127E90D5U, 450000 }, // dynasty
-    { 0x1324E960U, 1272000 }, // stafford
-    { 0x132D5A1AU, 225000 }, // crusader
-    { 0x13B57D8AU, 185000 }, // cogcabrio
-    { 0x142E0DC3U, 240000 }, // vacca
-    { 0x1446590AU, 3515000 }, // formula
-    { 0x149BD32AU, 18420500 }, // pbus2
-    { 0x14D22159U, 230000 }, // gauntlet2
-    { 0x14D69010U, 225000 }, // chino
-    { 0x1573422DU, 890000 }, // baller7
-    { 0x163F8520U, 13218750 }, // slamvan5
-    { 0x16E478C1U, 110000 }, // surano
-    { 0x171C92C4U, 1400000 }, // hauler2
-    { 0x17420102U, 225000 }, // cliffhanger
-    { 0x177DA45CU, 1470000 }, // jb7002
-    { 0x17DF5EC2U, 1966210 }, // squalo
-    { 0x185484E1U, 500000 }, // turismor
-    { 0x185E2FF3U, 1268000 }, // outlaw
-    { 0x18619B7EU, 580000 }, // kanjo
-    { 0x187D938DU, 6982500 }, // kuruma2
-    { 0x18F25AC7U, 440000 }, // infernus
-    { 0x196F9418U, 1775000 }, // dominator7
-    { 0x19DD9ED1U, 1245000 }, // nightshark
-    { 0x1A79847AU, 598500 }, // boxville4
-    { 0x1A861243U, 22849400 }, // imperator
-    { 0x1AAD0DEDU, 3724000 }, // volatol
-    { 0x1ABA13B5U, 8000 }, // cruiser
-    { 0x1B8165D3U, 1650000 }, // jubilee
-    { 0x1BB290BCU, 30000 }, // tornado
-    { 0x1BF8D381U, 865000 }, // lguard
-    { 0x1C09CF5EU, 374000 }, // baller5
-    { 0x1CBDC10BU, 1735000 }, // lynx
-    { 0x1D06D681U, 195000 }, // huntley
-    { 0x1DC0BA53U, 36000 }, // fusilade
-    { 0x1DD4C0FFU, 909000 }, // swinger
-    { 0x1F3766E3U, 55000 }, // voodoo2
-    { 0x1F52A43FU, 325000 }, // moonbeam
-    { 0x20314B42U, 21386400 }, // zr380
-    { 0x206D1B68U, 100000 }, // khamelion
-    { 0x2189D250U, 30922500 }, // apc
-    { 0x2290C50AU, 1260000 }, // warrener2
-    { 0x23CA25F2U, 625000 }, // hustler
-    { 0x250B0C5EU, 1625000 }, // luxor
-    { 0x2560B2FCU, 45000 }, // romero
-    { 0x25676EAFU, 135000 }, // fcr
-    { 0x256E92BAU, 1089000 }, // issi4
-    { 0x258C9364U, 1580000 }, // astron
-    { 0x25C5AF13U, 565000 }, // banshee2
-    { 0x25CBE2E2U, 247000 }, // baller4
-    { 0x26321E67U, 9975000 }, // lectro
-    { 0x2714AA93U, 2820000 }, // zeno
-    { 0x276D98A3U, 1145000 }, // comet5
-    { 0x27816B7EU, 1720000 }, // iwagen
-    { 0x27B4E6B0U, 513000 }, // baller6
-    { 0x27D79225U, 1609000 }, // bruiser
-    { 0x287FA449U, 38703000 }, // cerberus2
-    { 0x28AD20E1U, 2926000 }, // boxville5
-    { 0x28B67ACAU, 250000 }, // contender
-    { 0x28EAB80FU, 718000 }, // drafter
-    { 0x29B0DA97U, 11000 }, // surfer
-    { 0x29FCD3E4U, 396000 }, // cog552
-    { 0x2A54C47DU, 2113000 }, // supervolito
-    { 0x2AE524A8U, 430000 }, // ruston
-    { 0x2B0C4DCDU, 615000 }, // gauntlet3
-    { 0x2B26F456U, 62000 }, // dukes
-    { 0x2B7F9DE3U, 495000 }, // slamvan
-    { 0x2BE8B90AU, 1220000 }, // dominator8
-    { 0x2BEC3CBEU, 96000 }, // buffalo2
-    { 0x2C1FEA99U, 2214000 }, // vagrant
-    { 0x2C2C2324U, 120000 }, // gargoyle
-    { 0x2C509634U, 90000 }, // sovereign
-    { 0x2C634FBDU, 1300000 }, // frogger
-    { 0x2D3BD401U, 950000 }, // ztype
-    { 0x2DB8D1AAU, 150000 }, // alpha
-    { 0x2EA68690U, 1500000 }, // rhino
-    { 0x2EC385FEU, 695000 }, // coquette3
-    { 0x2EF89E46U, 7000 }, // sanchez
-    { 0x2F03547BU, 1750000 }, // buzzard
-    { 0x30D3F6D8U, 1995000 }, // sheava
-    { 0x30FF0190U, 412000 }, // defiler
-    { 0x31F0B376U, 1825000 }, // annihilator
-    { 0x3201DD49U, 900000 }, // z190
-    { 0x32174AFCU, 15308750 }, // monster4
-    { 0x322CF98FU, 140000 }, // rhapsody
-    { 0x32B29A4BU, 27000 }, // bjxl
-    { 0x33581161U, 299000 }, // jetmax
-    { 0x33B98FE2U, 1420000 }, // pariah
-    { 0x3404691CU, 1718000 }, // sultan2
-    { 0x3412AE2DU, 95000 }, // sentinel2
-    { 0x34B7390FU, 42000 }, // habanero
-    { 0x34B82784U, 35245000 }, // oppressor
-    { 0x34DBA661U, 31853500 }, // stromberg
-    { 0x34DD8AA1U, 16000 }, // intruder
-    { 0x35DED0DDU, 990000 }, // savestra
-    { 0x360A438EU, 154000 }, // cog55
-    { 0x36A167E0U, 925000 }, // rrocket
-    { 0x36B4A8A9U, 2375000 }, // xa21
-    { 0x378236E1U, 360000 }, // issi3
-    { 0x381E10BDU, 57456000 }, // ruiner2
-    { 0x3822BDFEU, 9044000 }, // casco
-    { 0x3944D5A0U, 2740000 }, // furia
-    { 0x39D6779EU, 275000 }, // duster
-    { 0x39D6E83FU, 3990000 }, // hydra
-    { 0x39DA2754U, 12000 }, // sultan
-    { 0x39F9C898U, 375000 }, // tampa
-    { 0x3ADB9758U, 1224000 }, // sugoi
-    { 0x3AF76F4AU, 38304000 }, // voltic2
-    { 0x3AF8C345U, 38000 }, // sandking2
-    { 0x3C26BD0CU, 12095000 }, // impaler2
-    { 0x3C4E2113U, 665000 }, // coquette2
-    { 0x3D29CD2BU, 195000 }, // youga2
-    { 0x3D7C6410U, 2825000 }, // tezeract
-    { 0x3D8FA25CU, 120000 }, // ninef
-    { 0x3DA47243U, 1440000 }, // nero
-    { 0x3DC92356U, 26533500 }, // nokota
-    { 0x3DEE5EDAU, 42000 }, // blista2
-    { 0x3E2E4F8AU, 51737000 }, // tula
-    { 0x3E3D1F59U, 2325000 }, // thrax
-    { 0x3E5BD8D9U, 1225000 }, // michelli
-    { 0x3EAB5555U, 350000 }, // jb700
-    { 0x3FC5D440U, 23000 }, // bobcatxl
-    { 0x3FD5AA2FU, 1750000 }, // toro
-    { 0x400F5147U, 252000 }, // specter2
-    { 0x4019CB4CU, 5150000 }, // swift2
-    { 0x403820E8U, 13233500 }, // velum2
-    { 0x404B6381U, 400000 }, // pigalle
-    { 0x40C332A3U, 225000 }, // manchez2
-    { 0x4131F378U, 605000 }, // nero2
-    { 0x41B77FA4U, 695000 }, // verlierer2
-    { 0x41D149AAU, 650000 }, // sentinel3
-    { 0x4201A843U, 620000 }, // peyote3
-    { 0x42836BE5U, 830000 }, // hotring
-    { 0x42ACA95FU, 408000 }, // asbo
-    { 0x42BC5E19U, 415000 }, // slamvan3
-    { 0x42F2ED16U, 250000 }, // superd
-    { 0x432AA566U, 16000 }, // bfinjection
-    { 0x4339CD69U, 10000 }, // tribike
-    { 0x43779C54U, 8000 }, // bmx
-    { 0x440851D8U, 1797000 }, // comet7
-    { 0x4543B74DU, 13000 }, // rumpo
-    { 0x4662BCBBU, 14896000 }, // technical2
-    { 0x46699F47U, 37040500 }, // akula
-    { 0x4669D038U, 2997000 }, // openwheel2
-    { 0x47BBCF2EU, 253000 }, // xls
-    { 0x48CECED3U, 30000 }, // seminole
-    { 0x494752F7U, 1815000 }, // seasparrow2
-    { 0x49863E9CU, 500000 }, // marshall
-    { 0x4992196CU, 1260000 }, // gp1
-    { 0x49E25BA1U, 1089000 }, // issi6
-    { 0x4ABEBF23U, 1775000 }, // caracara
-    { 0x4B6C568AU, 82000 }, // hakuchou
-    { 0x4BA4E8DCU, 58000 }, // landstalker
-    { 0x4BFCF28BU, 610000 }, // bestiagts
-    { 0x4C3FFF49U, 512000 }, // deviant
-    { 0x4C80EB0EU, 550000 }, // airbus
-    { 0x4C8DBA51U, 2400000 }, // zhaba
-    { 0x4DC079D7U, 1627000 }, // growler
-    { 0x4EE74355U, 2750000 }, // emerus
-    { 0x4FAF0D70U, 2200000 }, // kosatka
-    { 0x4FB1A214U, 60000 }, // serrano
-    { 0x4FF77E37U, 950000 }, // vestra
-    { 0x506434F6U, 82000 }, // oracle
-    { 0x50732C82U, 60000 }, // sentinel
-    { 0x5097F589U, 1603000 }, // sc1
-    { 0x50A6FB9CU, 24805000 }, // shinobi
-    { 0x50D4D19FU, 1425000 }, // technical3
-    { 0x51D83328U, 120000 }, // warrener
-    { 0x5216AD5EU, 1370000 }, // remus
-    { 0x52FF9437U, 1890000 }, // cyclone
-    { 0x546DA331U, 1490000 }, // previon
-    { 0x5502626CU, 1750000 }, // fmj
-    { 0x55365079U, 610000 }, // brioso2
-    { 0x56C8A5EFU, 3660000 }, // toreador
-    { 0x56CDEE7DU, 1285000 }, // vstr
-    { 0x56D42971U, 718000 }, // tulip
-    { 0x57F682AFU, 130000 }, // rumpo3
-    { 0x586765FBU, 47215000 }, // deluxo
-    { 0x58B3979CU, 25000 }, // paradise
-    { 0x58CDAF30U, 36575000 }, // thruster
-    { 0x58CF185CU, 208000 }, // schafter4
-    { 0x58E316C7U, 1995000 }, // sanctus
-    { 0x58F77553U, 3400000 }, // openwheel1
-    { 0x5993F939U, 1225000 }, // trailerlarge
-    { 0x59A9E570U, 998000 }, // torero
-    { 0x59E0FBF3U, 9000 }, // picador
-    { 0x5B531351U, 1845000 }, // deity
-    { 0x5BA0FF1EU, 1089000 }, // issi5
-    { 0x5BEB3CE0U, 30762900 }, // scarab2
-    { 0x5C23AF9BU, 850000 }, // stinger
-    { 0x5C55CB39U, 155000 }, // brioso
-    { 0x5D1903F9U, 710000 }, // comet4
-    { 0x5D56F01BU, 4788000 }, // molotok
-    { 0x5E4327C8U, 845000 }, // windsor
-    { 0x5EE005DAU, 1795000 }, // deveste
-    { 0x6068AD86U, 335000 }, // fagaloa
-    { 0x619C1B82U, 22849400 }, // imperator2
-    { 0x61FE4D6AU, 870000 }, // weevil
-    { 0x6210CBB0U, 9000 }, // rancherxl
-    { 0x6290F15BU, 3205300 }, // pounder2
-    { 0x6322B39AU, 2200000 }, // t20
-    { 0x63ABADE7U, 9000 }, // akuma
-    { 0x64DE07A1U, 3800000 }, // strikeforce
-    { 0x64F49967U, 1308000 }, // yosemite2
-    { 0x665F785DU, 925000 }, // manana2
-    { 0x669EB40AU, 15308750 }, // monster3
-    { 0x66B4FC45U, 10000 }, // stratum
-    { 0x67D2B389U, 500000 }, // streiter
-    { 0x67D52852U, 13218750 }, // slamvan6
-    { 0x6827CF72U, 2240000 }, // stockade
-    { 0x6882FA73U, 48000 }, // enduro
-    { 0x68A5D1EFU, 1550000 }, // cypher
-    { 0x69F06B57U, 15000 }, // washington
-    { 0x6ABDF65EU, 245000 }, // diablous2
-    { 0x6B73A9BEU, 1288000 }, // youga3
-    { 0x6CBD1D6DU, 1150000 }, // besra
-    { 0x6D19CCBCU, 38000 }, // peyote
-    { 0x6D6F8F43U, 75000 }, // thrust
-    { 0x6DBD6C0AU, 615000 }, // retinue
-    { 0x6E8DA4F7U, 897000 }, // issi7
-    { 0x6EF89CCCU, 2125000 }, // longfin
-    { 0x6F039A67U, 812000 }, // zion3
-    { 0x6F946279U, 485000 }, // yosemite
-    { 0x6FACDF31U, 48000 }, // ratbike
-    { 0x6FF0F727U, 149000 }, // baller3
-    { 0x706E2B40U, 599000 }, // specter
-    { 0x707E63A4U, 816000 }, // tropos
-    { 0x710A2B9BU, 370000 }, // moonbeam2
-    { 0x711D4738U, 11305000 }, // dune3
-    { 0x71CB2FFBU, 24000 }, // fugitive
-    { 0x71CBEA98U, 940000 }, // gb200
-    { 0x71D3B6F0U, 38703000 }, // cerberus3
-    { 0x72934BE4U, 438000 }, // schafter6
-    { 0x72A4C31EU, 71000 }, // stalion
-    { 0x734C5E50U, 745000 }, // gauntlet4
-    { 0x73920F8EU, 3295000 }, // firetruk
-    { 0x7397224CU, 1535000 }, // vagner
-    { 0x73F4110EU, 957600 }, // mule4
-    { 0x761E2AD3U, 2000000 }, // titan
-    { 0x767164D6U, 1950000 }, // osiris
-    { 0x76D7C404U, 1900000 }, // reever
-    { 0x779B4F2DU, 420000 }, // voodoo
-    { 0x779F23AAU, 60000 }, // cavalcade
-    { 0x780FFBD2U, 1630000 }, // vetir
-    { 0x7836CE2FU, 9000 }, // futo
-    { 0x79178F0AU, 1620000 }, // retinue2
-    { 0x794CB30CU, 264000 }, // esskey
-    { 0x7980BDD5U, 1800000 }, // euros
-    { 0x798682A2U, 26666500 }, // brutus3
-    { 0x79DD18AEU, 1775000 }, // menacer
-    { 0x7A2EF5E4U, 885000 }, // rapidgt3
-    { 0x7B406EFBU, 2550000 }, // tyrus
-    { 0x7B47A6A7U, 650000 }, // lurcher
-    { 0x7B54A9D3U, 38902500 }, // oppressor2
-    { 0x7B7E56F0U, 8977500 }, // insurgent2
-    { 0x7B8AB45FU, 195000 }, // carbonizzare
-    { 0x7E8F677FU, 2700000 }, // prototipo
-    { 0x7F3415E3U, 378000 }, // dukes3
-    { 0x7F5C91F1U, 85000 }, // rocoto
-    { 0x7F81A829U, 26666500 }, // brutus
-    { 0x806B9CC3U, 16000 }, // bagger
-    { 0x810369E2U, 1000000 }, // dump
-    { 0x8125BCF9U, 8000 }, // blazer
-    { 0x81634188U, 10000 }, // manana
-    { 0x81794C70U, 250000 }, // stunt
-    { 0x817AFAADU, 815000 }, // gauntlet5
-    { 0x8198AEDCU, 2305000 }, // entity2
-    { 0x81A9CDDFU, 36000 }, // faction
-    { 0x81BD2ED0U, 3450000 }, // avenger
-    { 0x81E38F7FU, 116000 }, // avarus
-    { 0x825A9F4CU, 375000 }, // guardian
-    { 0x829A3C44U, 1385000 }, // rallytruck
-    { 0x82CAC433U, 1250000 }, // tug
-    { 0x82E47E85U, 1280000 }, // club
-    { 0x82E499FAU, 875000 }, // stingergt
-    { 0x83051506U, 12635000 }, // technical
-    { 0x83070B62U, 3318350 }, // impaler
-    { 0x8408F33AU, 785000 }, // gt500
-    { 0x84718D34U, 525000 }, // coach
-    { 0x8526E2F5U, 13218750 }, // slamvan4
-    { 0x85E8E76BU, 1189000 }, // italigtb
-    { 0x8612B64BU, 22000 }, // rebel2
-    { 0x8644331AU, 1609000 }, // bruiser3
-    { 0x86618EDAU, 400000 }, // primo2
-    { 0x866BCE26U, 695000 }, // faction3
-    { 0x86FE0B60U, 254000 }, // cognoscenti
-    { 0x877358ADU, 645000 }, // comet3
-    { 0x885F3671U, 7315000 }, // pbus
-    { 0x8911B9F5U, 145000 }, // feltzer2
-    { 0x897AFC65U, 1375000 }, // terbyte
-    { 0x89BA59F5U, 23009000 }, // havok
-    { 0x8B13F083U, 30000 }, // stretch
-    { 0x8B213907U, 3115000 }, // formula2
-    { 0x8C2BD0DCU, 585000 }, // nightshade
-    { 0x8CB29A14U, 132000 }, // rapidgt
-    { 0x8CF5CAE1U, 900000 }, // windsor2
-    { 0x8D45DF49U, 12095000 }, // impaler3
-    { 0x8D4B7A8AU, 2025000 }, // insurgent3
-    { 0x8E08EC82U, 6583500 }, // wastelander
-    { 0x8E9254FBU, 26000 }, // asterope
-    { 0x8F0E3594U, 38000 }, // surge
-    { 0x8F49AE28U, 26666500 }, // brutus2
-    { 0x8FB66F9BU, 10000 }, // premier
-    { 0x8FD54EBBU, 1862000 }, // trailersmall2
-    { 0x9114EADAU, 17955000 }, // insurgent
-    { 0x91373058U, 1615000 }, // zr350
-    { 0x91CA96EEU, 1500000 }, // neon
-    { 0x920016F1U, 2295000 }, // volatus
-    { 0x9229E4EBU, 475000 }, // faggio
-    { 0x92EF6E04U, 1135000 }, // pfister811
-    { 0x92F5024EU, 608000 }, // novak
-    { 0x93F09558U, 1269000 }, // deathbike2
-    { 0x94114926U, 678000 }, // seminole2
-    { 0x94204D89U, 12000 }, // asea
-    { 0x9472CD24U, 805000 }, // peyote2
-    { 0x94B395C5U, 32000 }, // gauntlet
-    { 0x94DA98EFU, 375000 }, // tornado5
-    { 0x95466BDBU, 335000 }, // faction2
-    { 0x9628879CU, 35000 }, // granger
-    { 0x96E24857U, 665000 }, // microlight
-    { 0x9734F3EAU, 880000 }, // penetrator
-    { 0x97398A4BU, 695000 }, // seven70
-    { 0x97553C28U, 1475000 }, // everon
-    { 0x97E55D11U, 300000 }, // mammatus
-    { 0x9804F4C7U, 12095000 }, // impaler4
-    { 0x98F65A5EU, 1510000 }, // coquette4
-    { 0x991EFC04U, 1878000 }, // comet6
-    { 0x9A474B5EU, 1545000 }, // avisa
-    { 0x9A9EB7DEU, 36575000 }, // starling
-    { 0x9AE6DDA1U, 155000 }, // bullet
-    { 0x9B065C9EU, 1609000 }, // bruiser2
-    { 0x9B16A3B4U, 31255000 }, // riot2
-    { 0x9B909C94U, 15000 }, // sabregt
-    { 0x9C429B6AU, 450000 }, // velum
-    { 0x9C5E5644U, 3330000 }, // supervolito2
-    { 0x9C669788U, 12000 }, // double
-    { 0x9CF21E0FU, 20000 }, // dune
-    { 0x9CFFFC56U, 995000 }, // mamba
-    { 0x9D0450CAU, 780000 }, // maverick
-    { 0x9D96B45BU, 32000 }, // radi
-    { 0x9DAE1398U, 25536000 }, // phantom2
-    { 0x9F4B77BEU, 150000 }, // voltic
-    { 0x9F6ED5A2U, 1875000 }, // neo
-    { 0xA0438767U, 100000 }, // nightblade
-    { 0xA09E15FDU, 37905000 }, // valkyrie
-    { 0xA1355F67U, 17556000 }, // blazer5
-    { 0xA1B3A871U, 1970000 }, // jester4
-    { 0xA29D6D10U, 975000 }, // feltzer3
-    { 0xA29F78B0U, 909000 }, // clique
-    { 0xA31CB573U, 378000 }, // tornado6
-    { 0xA3FC0F4DU, 29000 }, // gresley
-    { 0xA42FC3A5U, 1785000 }, // vectre
-    { 0xA4A4E453U, 380000 }, // riata
-    { 0xA4D99B7DU, 1375000 }, // raiden
-    { 0xA4F52C13U, 1740000 }, // cinquemila
-    { 0xA52F6866U, 21213500 }, // alphaz1
-    { 0xA5325278U, 67000 }, // manchez
-    { 0xA6297CC8U, 1590000 }, // futo2
-    { 0xA703E4A9U, 995000 }, // veto2
-    { 0xA774B5A6U, 116000 }, // schafter3
-    { 0xA7CE1BC5U, 715000 }, // brawler
-    { 0xA7DCC35CU, 21386400 }, // zr3803
-    { 0xA7EDE74DU, 10000 }, // stanier
-    { 0xA8E38B01U, 130000 }, // ninef2
-    { 0xA960B13EU, 8000 }, // sanchez2
-    { 0xA988D3A2U, 25000 }, // prairie
-    { 0xA9EC907BU, 2765000 }, // ignus
-    { 0xAA699BB6U, 25000 }, // bodhi2
-    { 0xAA6F980AU, 38503500 }, // khanjali
-    { 0xAC33179CU, 915000 }, // infernus2
-    { 0xAC4E93C9U, 145000 }, // daemon2
-    { 0xAC5DF515U, 725000 }, // zentorno
-    { 0xAD6065C0U, 44555000 }, // pyro
-    { 0xAE0A3D4FU, 1132000 }, // dominator5
-    { 0xAE12C99CU, 1269000 }, // deathbike3
-    { 0xAE2BFE94U, 1263500 }, // kuruma
-    { 0xAED64A63U, 180000 }, // chino2
-    { 0xAF0B8D48U, 2310000 }, // tigon
-    { 0xAF599F01U, 630000 }, // vindicator
-    { 0xAF966F3CU, 875000 }, // caracara2
-    { 0xB1D95DA0U, 650000 }, // cheetah
-    { 0xB2A716A3U, 240000 }, // jester
-    { 0xB2CF7250U, 1900000 }, // nimbus
-    { 0xB2E046FBU, 1132000 }, // dominator6
-    { 0xB2FE5CF9U, 795000 }, // entityxf
-    { 0xB3206692U, 9000 }, // ingot
-    { 0xB328B188U, 55000 }, // faggio3
-    { 0xB39B0AE6U, 6500000 }, // lazer
-    { 0xB44F0582U, 69000 }, // blazer3
-    { 0xB472D2B5U, 565000 }, // ellie
-    { 0xB4F32118U, 1675000 }, // flashgt
-    { 0xB52B5113U, 65000 }, // schafter2
-    { 0xB53C6C52U, 2275000 }, // minitank
-    { 0xB5D306A4U, 1495000 }, // tailgater2
-    { 0xB5EF4C33U, 3750000 }, // vigilante
-    { 0xB6410173U, 249000 }, // dubsta3
-    { 0xB67597ECU, 10000 }, // tribike2
-    { 0xB6846A55U, 2475000 }, // le7b
-    { 0xB779A091U, 1000000 }, // adder
-    { 0xB79C1BF5U, 1150000 }, // shamal
-    { 0xB79F589EU, 10000000 }, // luxor2
-    { 0xB7D9F7F1U, 21080500 }, // tampa3
-    { 0xB802DD46U, 3000 }, // rebel
-    { 0xB820ED5EU, 160000 }, // blade
-    { 0xB8D657ADU, 1995000 }, // calico
-    { 0xB8E2AE18U, 65000 }, // zion2
-    { 0xB9210FD0U, 45000 }, // sandking
-    { 0xB9CB3B69U, 18000 }, // issi2
-    { 0xBA5334ACU, 498000 }, // toros
-    { 0xBB6B404FU, 9000 }, // primo
-    { 0xBB78956AU, 3465000 }, // italirsx
-    { 0xBBA2A2F7U, 30762900 }, // scarab
-    { 0xBC32A33BU, 50000 }, // fq2
-    { 0xBC5DC07EU, 1980000 }, // taipan
-    { 0xBC7C0A00U, 2165000 }, // imorgon
-    { 0xBC993509U, 25000 }, // dilettante
-    { 0xBCDE91F0U, 330000 }, // minivan2
-    { 0xBD1B39C3U, 60000 }, // zion
-    { 0xBE0E6126U, 350000 }, // jester2
-    { 0xBE11EFC6U, 21386400 }, // zr3802
-    { 0xBE819C63U, 30000 }, // rentalbus
-    { 0xBF1691E0U, 448000 }, // furoregt
-    { 0xC0240885U, 995000 }, // tampa2
-    { 0xC07107EEU, 1325000 }, // submersible2
-    { 0xC1A8A914U, 1310000 }, // slamtruck
-    { 0xC1AE4D16U, 100000 }, // comet2
-    { 0xC1CE1183U, 4139900 }, // marquis
-    { 0xC1E908D2U, 126000 }, // banshee
-    { 0xC2974024U, 168990 }, // seashark
-    { 0xC397F748U, 390000 }, // buccaneer2
-    { 0xC3D7C72BU, 99000 }, // zombiea
-    { 0xC3DDFDCEU, 55000 }, // tailgater
-    { 0xC3F25753U, 12967500 }, // howard
-    { 0xC4810400U, 2250000 }, // visione
-    { 0xC514AAE0U, 145000 }, // cheburek
-    { 0xC52C6B93U, 725000 }, // dominator3
-    { 0xC575DF11U, 705000 }, // turismo2
-    { 0xC58DA34AU, 1850000 }, // dinghy5
-    { 0xC5DD6967U, 1596000 }, // rogue
-    { 0xC7E55211U, 1625000 }, // locust
-    { 0xC96B73D9U, 315000 }, // dominator2
-    { 0xC972A155U, 2995000 }, // champion
-    { 0xC98BBAD6U, 520000 }, // glendale2
-    { 0xC9CEAF06U, 9000 }, // pcj
-    { 0xC9E8FF76U, 5985000 }, // burrito2
-    { 0xCA495705U, 500000 }, // dodo
-    { 0xCA62927AU, 240000 }, // virgo2
-    { 0xCABD11E8U, 9000 }, // ruffian
-    { 0xCADD5D2DU, 15000 }, // bati2
-    { 0xCB0E7CD9U, 325000 }, // schafter5
-    { 0xCB642637U, 797000 }, // nebula
-    { 0xCCE5C8FAU, 895000 }, // veto
-    { 0xCD93A7DBU, 7420140 }, // monster
-    { 0xCE0B9F22U, 1220000 }, // landstalker2
-    { 0xCE44C4B9U, 1700000 }, // komoda
-    { 0xCE6B35A4U, 550000 }, // btype2
-    { 0xCEC6B9B7U, 21000 }, // vigero
-    { 0xCEEA3F4BU, 450000 }, // barracks
-    { 0xCFCFEB3BU, 50000 }, // patriot
-    { 0xD039510BU, 38703000 }, // cerberus
-    { 0xD1AD4937U, 701000 }, // omnis
-    { 0xD2D5E00EU, 196000 }, // fcr2
-    { 0xD2F77E37U, 22849400 }, // imperator3
-    { 0xD35698EFU, 31255000 }, // mogul
-    { 0xD37B7976U, 80000 }, // schwarzer
-    { 0xD4AE63D9U, 1815000 }, // seasparrow
-    { 0xD556917CU, 15308750 }, // monster5
-    { 0xD577C962U, 500000 }, // bus
-    { 0xD6BC7523U, 33117000 }, // chernobog
-    { 0xD6FB0F30U, 1132000 }, // dominator4
-    { 0xD756460CU, 29000 }, // buccaneer
-    { 0xD757D97DU, 1925000 }, // zorrusso
-    { 0xD7C56D39U, 648000 }, // raptor
-    { 0xD80F4A44U, 1710000 }, // patriot3
-    { 0xD83C13CEU, 6000 }, // ratloader
-    { 0xD86A0247U, 2875000 }, // krieger
-    { 0xD876DBE2U, 695000 }, // trophytruck2
-    { 0xD9927FE3U, 240000 }, // cuban800
-    { 0xD9F0503DU, 46284000 }, // scramjet
-    { 0xDA288376U, 12000 }, // nemesis
-    { 0xDA5819A3U, 385000 }, // massacro2
-    { 0xDA5EC7DAU, 1380000 }, // penumbra2
-    { 0xDAC67112U, 60000 }, // jackal
-    { 0xDB0C9B04U, 2150000 }, // buffalo4
-    { 0xDB20A373U, 95000 }, // wolfsbane
-    { 0xDBA9DBFCU, 356000 }, // vortex
-    { 0xDBF2D57AU, 558000 }, // cognoscenti2
-    { 0xDC19D101U, 982000 }, // btype3
-    { 0xDC434E51U, 35000 }, // sadler
-    { 0xDCBCBE48U, 80000 }, // f620
-    { 0xDCE1D9F7U, 375000 }, // ratloader2
-    { 0xDD71BFEBU, 30762900 }, // scarab3
-    { 0xDE05FB87U, 122000 }, // zombieb
-    { 0xDE3D9D22U, 95000 }, // elegy2
-    { 0xE18195B2U, 80000 }, // oracle2
-    { 0xE1C03AB0U, 1300000 }, // schlagen
-    { 0xE2504942U, 195000 }, // virgo
-    { 0xE33A477BU, 495000 }, // italigtb2
-    { 0xE505CF99U, 1715000 }, // rt3000
-    { 0xE550775BU, 905000 }, // paragon
-    { 0xE5BA6858U, 81000 }, // blazer4
-    { 0xE62B361BU, 490000 }, // monroe
-    { 0xE6401328U, 522000 }, // xls2
-    { 0xE644E480U, 85000 }, // panto
-    { 0xE6E967F8U, 6118000 }, // patriot2
-    { 0xE78CC3D9U, 1610000 }, // revolter
-    { 0xE7D2A16EU, 2225000 }, // shotaro
-    { 0xE80F67EEU, 277000 }, // stalion2
-    { 0xE823FB48U, 10000 }, // tribike3
-    { 0xE8983F9FU, 11305000 }, // seabreeze
-    { 0xE8A8BA94U, 875000 }, // viseris
-    { 0xE8A8BDA8U, 90000 }, // felon
-    { 0xE9805550U, 24000 }, // penumbra
-    { 0xE99011C2U, 2515000 }, // tyrant
-    { 0xEA313705U, 4350000 }, // alkonost
-    { 0xEA6A047FU, 835000 }, // hellion
-    { 0xEB298297U, 75000 }, // bifta
-    { 0xEBC24DF2U, 1600000 }, // swift
-    { 0xEC3E3404U, 1965000 }, // italigto
-    { 0xEC8F7094U, 665000 }, // dukes2
-    { 0xECA6B6A3U, 2575000 }, // s80
-    { 0xED552C74U, 1955000 }, // autarch
-    { 0xED62BFA9U, 3192000 }, // dune5
-    { 0xED7EADA4U, 30000 }, // minivan
-    { 0xEDA4ED97U, 11903500 }, // blimp3
-    { 0xEDC6F847U, 1100000 }, // brickade
-    { 0xEDD516C6U, 35000 }, // buffalo
-    { 0xEE6024BCU, 795000 }, // sultanrs
-    { 0xEEA75E63U, 1789000 }, // sultan3
-    { 0xEEF345ECU, 1590000 }, // rcbandito
-    { 0xEF2295C9U, 251600 }, // suntrap
-    { 0xEF813606U, 2955000 }, // patrolboat
-    { 0xF06C29C7U, 1380000 }, // granger2
-    { 0xF0C2A91FU, 976000 }, // hakuchou2
-    { 0xF1B44F44U, 169000 }, // diablous
-    { 0xF26CEFF9U, 10000 }, // ruiner
-    { 0xF330CB6AU, 790000 }, // jester3
-    { 0xF34DFB25U, 21213500 }, // barrage
-    { 0xF376F1E6U, 1100000 }, // winky
-    { 0xF38C4245U, 1225000 }, // jugular
-    { 0xF4E1AA15U, 2000 }, // scorcher
-    { 0xF683EACAU, 925000 }, // innovation
-    { 0xF77ADE32U, 275000 }, // massacro
-    { 0xF79A00F7U, 9000 }, // vader
-    { 0xF8C2E0E7U, 345000 }, // kamacho
-    { 0xF8D48E7AU, 15000 }, // journey
-    { 0xF92AEC4DU, 1650000 }, // limo2
-    { 0xF9300CC5U, 15000 }, // bati
-    { 0xF9E67C05U, 1130000 }, // squaddie
-    { 0xFAAD85EEU, 95000 }, // felon2
-    { 0xFB133A17U, 25935000 }, // savage
-    { 0xFCC2F483U, 597000 }, // freecrawler
-    { 0xFCFCB68BU, 1790000 }, // cargobob
-    { 0xFD128DFDU, 596000 }, // vamos
-    { 0xFD231729U, 62000 }, // blazer2
-    { 0xFD707EDEU, 4123000 }, // hunter
-    { 0xFE0A508CU, 59185000 }, // bombushka
-    { 0xFE141DA6U, 22543500 }, // halftrack
-    { 0xFE5F0722U, 1269000 }, // deathbike
-    { 0xFEFD644FU, 30000 }, // bison
-    { 0xFF22D208U, 8000 }, // regina
-    { 0xFFB15B5EU, 205000 }, // exemplar
+    { 0x00675ED7U, 210000 },
+    { 0x00ABB0C0U, 40000 },
+    { 0x00E83C17U, 535000 },
+    { 0x00FDFFB0U, 165000 },
+    { 0x0239E390U, 90000 },
+    { 0x0350D1ABU, 5000 },
+    { 0x03E5F6B8U, 16000 },
+    { 0x0409D787U, 700000 },
+    { 0x047A6BC1U, 200000 },
+    { 0x04CE68ACU, 35000 },
+    { 0x04F48FC4U, 1175000 },
+    { 0x05283265U, 95000 },
+    { 0x05852838U, 51000 },
+    { 0x0612F4B6U, 550000 },
+    { 0x067BC037U, 138000 },
+    { 0x06FF6914U, 750000 },
+    { 0x097E5533U, 1150000 },
+    { 0x09D80F93U, 1700000 },
+    { 0x0A90ED5CU, 1225000 },
+    { 0x0BBA2261U, 904000 },
+    { 0x0D4E5F4DU, 865000 },
+    { 0x0D4EA603U, 490000 },
+    { 0x0DC60D2BU, 325000 },
+    { 0x0DF381E5U, 1595000 },
+    { 0x0E2C013EU, 535000 },
+    { 0x1044926FU, 1329000 },
+    { 0x1149422FU, 22000 },
+    { 0x11962E49U, 3870000 },
+    { 0x11AA0E14U, 864500 },
+    { 0x11CBC051U, 192000 },
+    { 0x11F58A5AU, 670000 },
+    { 0x11F76C14U, 15000 },
+    { 0x127E90D5U, 450000 },
+    { 0x1324E960U, 1272000 },
+    { 0x132D5A1AU, 225000 },
+    { 0x13B57D8AU, 185000 },
+    { 0x142E0DC3U, 240000 },
+    { 0x1446590AU, 3515000 },
+    { 0x149BD32AU, 18420500 },
+    { 0x14D22159U, 230000 },
+    { 0x14D69010U, 225000 },
+    { 0x1573422DU, 890000 },
+    { 0x163F8520U, 13218750 },
+    { 0x16E478C1U, 110000 },
+    { 0x171C92C4U, 1400000 },
+    { 0x17420102U, 225000 },
+    { 0x177DA45CU, 1470000 },
+    { 0x17DF5EC2U, 1966210 },
+    { 0x185484E1U, 500000 },
+    { 0x185E2FF3U, 1268000 },
+    { 0x18619B7EU, 580000 },
+    { 0x187D938DU, 6982500 },
+    { 0x18F25AC7U, 440000 },
+    { 0x196F9418U, 1775000 },
+    { 0x19DD9ED1U, 1245000 },
+    { 0x1A79847AU, 598500 },
+    { 0x1A861243U, 22849400 },
+    { 0x1AAD0DEDU, 3724000 },
+    { 0x1ABA13B5U, 8000 },
+    { 0x1B8165D3U, 1650000 },
+    { 0x1BB290BCU, 30000 },
+    { 0x1BF8D381U, 865000 },
+    { 0x1C09CF5EU, 374000 },
+    { 0x1CBDC10BU, 1735000 },
+    { 0x1D06D681U, 195000 },
+    { 0x1DC0BA53U, 36000 },
+    { 0x1DD4C0FFU, 909000 },
+    { 0x1F3766E3U, 55000 },
+    { 0x1F52A43FU, 325000 },
+    { 0x20314B42U, 21386400 },
+    { 0x206D1B68U, 100000 },
+    { 0x2189D250U, 30922500 },
+    { 0x2290C50AU, 1260000 },
+    { 0x23CA25F2U, 625000 },
+    { 0x250B0C5EU, 1625000 },
+    { 0x2560B2FCU, 45000 },
+    { 0x25676EAFU, 135000 },
+    { 0x256E92BAU, 1089000 },
+    { 0x258C9364U, 1580000 },
+    { 0x25C5AF13U, 565000 },
+    { 0x25CBE2E2U, 247000 },
+    { 0x26321E67U, 9975000 },
+    { 0x2714AA93U, 2820000 },
+    { 0x276D98A3U, 1145000 },
+    { 0x27816B7EU, 1720000 },
+    { 0x27B4E6B0U, 513000 },
+    { 0x27D79225U, 1609000 },
+    { 0x287FA449U, 38703000 },
+    { 0x28AD20E1U, 2926000 },
+    { 0x28B67ACAU, 250000 },
+    { 0x28EAB80FU, 718000 },
+    { 0x29B0DA97U, 11000 },
+    { 0x29FCD3E4U, 396000 },
+    { 0x2A54C47DU, 2113000 },
+    { 0x2AE524A8U, 430000 },
+    { 0x2B0C4DCDU, 615000 },
+    { 0x2B26F456U, 62000 },
+    { 0x2B7F9DE3U, 495000 },
+    { 0x2BE8B90AU, 1220000 },
+    { 0x2BEC3CBEU, 96000 },
+    { 0x2C1FEA99U, 2214000 },
+    { 0x2C2C2324U, 120000 },
+    { 0x2C509634U, 90000 },
+    { 0x2C634FBDU, 1300000 },
+    { 0x2D3BD401U, 950000 },
+    { 0x2DB8D1AAU, 150000 },
+    { 0x2EA68690U, 1500000 },
+    { 0x2EC385FEU, 695000 },
+    { 0x2EF89E46U, 7000 },
+    { 0x2F03547BU, 1750000 },
+    { 0x30D3F6D8U, 1995000 },
+    { 0x30FF0190U, 412000 },
+    { 0x31F0B376U, 1825000 },
+    { 0x3201DD49U, 900000 },
+    { 0x32174AFCU, 15308750 },
+    { 0x322CF98FU, 140000 },
+    { 0x32B29A4BU, 27000 },
+    { 0x33581161U, 299000 },
+    { 0x33B98FE2U, 1420000 },
+    { 0x3404691CU, 1718000 },
+    { 0x3412AE2DU, 95000 },
+    { 0x34B7390FU, 42000 },
+    { 0x34B82784U, 35245000 },
+    { 0x34DBA661U, 31853500 },
+    { 0x34DD8AA1U, 16000 },
+    { 0x35DED0DDU, 990000 },
+    { 0x360A438EU, 154000 },
+    { 0x36A167E0U, 925000 },
+    { 0x36B4A8A9U, 2375000 },
+    { 0x378236E1U, 360000 },
+    { 0x381E10BDU, 57456000 },
+    { 0x3822BDFEU, 9044000 },
+    { 0x3944D5A0U, 2740000 },
+    { 0x39D6779EU, 275000 },
+    { 0x39D6E83FU, 3990000 },
+    { 0x39DA2754U, 12000 },
+    { 0x39F9C898U, 375000 },
+    { 0x3ADB9758U, 1224000 },
+    { 0x3AF76F4AU, 38304000 },
+    { 0x3AF8C345U, 38000 },
+    { 0x3C26BD0CU, 12095000 },
+    { 0x3C4E2113U, 665000 },
+    { 0x3D29CD2BU, 195000 },
+    { 0x3D7C6410U, 2825000 },
+    { 0x3D8FA25CU, 120000 },
+    { 0x3DA47243U, 1440000 },
+    { 0x3DC92356U, 26533500 },
+    { 0x3DEE5EDAU, 42000 },
+    { 0x3E2E4F8AU, 51737000 },
+    { 0x3E3D1F59U, 2325000 },
+    { 0x3E5BD8D9U, 1225000 },
+    { 0x3EAB5555U, 350000 },
+    { 0x3FC5D440U, 23000 },
+    { 0x3FD5AA2FU, 1750000 },
+    { 0x400F5147U, 252000 },
+    { 0x4019CB4CU, 5150000 },
+    { 0x403820E8U, 13233500 },
+    { 0x404B6381U, 400000 },
+    { 0x40C332A3U, 225000 },
+    { 0x4131F378U, 605000 },
+    { 0x41B77FA4U, 695000 },
+    { 0x41D149AAU, 650000 },
+    { 0x4201A843U, 620000 },
+    { 0x42836BE5U, 830000 },
+    { 0x42ACA95FU, 408000 },
+    { 0x42BC5E19U, 415000 },
+    { 0x42F2ED16U, 250000 },
+    { 0x432AA566U, 16000 },
+    { 0x4339CD69U, 10000 },
+    { 0x43779C54U, 8000 },
+    { 0x440851D8U, 1797000 },
+    { 0x4543B74DU, 13000 },
+    { 0x4662BCBBU, 14896000 },
+    { 0x46699F47U, 37040500 },
+    { 0x4669D038U, 2997000 },
+    { 0x47BBCF2EU, 253000 },
+    { 0x48CECED3U, 30000 },
+    { 0x494752F7U, 1815000 },
+    { 0x49863E9CU, 500000 },
+    { 0x4992196CU, 1260000 },
+    { 0x49E25BA1U, 1089000 },
+    { 0x4ABEBF23U, 1775000 },
+    { 0x4B6C568AU, 82000 },
+    { 0x4BA4E8DCU, 58000 },
+    { 0x4BFCF28BU, 610000 },
+    { 0x4C3FFF49U, 512000 },
+    { 0x4C80EB0EU, 550000 },
+    { 0x4C8DBA51U, 2400000 },
+    { 0x4DC079D7U, 1627000 },
+    { 0x4EE74355U, 2750000 },
+    { 0x4FAF0D70U, 2200000 },
+    { 0x4FB1A214U, 60000 },
+    { 0x4FF77E37U, 950000 },
+    { 0x506434F6U, 82000 },
+    { 0x50732C82U, 60000 },
+    { 0x5097F589U, 1603000 },
+    { 0x50A6FB9CU, 24805000 },
+    { 0x50D4D19FU, 1425000 },
+    { 0x51D83328U, 120000 },
+    { 0x5216AD5EU, 1370000 },
+    { 0x52FF9437U, 1890000 },
+    { 0x546DA331U, 1490000 },
+    { 0x5502626CU, 1750000 },
+    { 0x55365079U, 610000 },
+    { 0x56C8A5EFU, 3660000 },
+    { 0x56CDEE7DU, 1285000 },
+    { 0x56D42971U, 718000 },
+    { 0x57F682AFU, 130000 },
+    { 0x586765FBU, 47215000 },
+    { 0x58B3979CU, 25000 },
+    { 0x58CDAF30U, 36575000 },
+    { 0x58CF185CU, 208000 },
+    { 0x58E316C7U, 1995000 },
+    { 0x58F77553U, 3400000 },
+    { 0x5993F939U, 1225000 },
+    { 0x59A9E570U, 998000 },
+    { 0x59E0FBF3U, 9000 },
+    { 0x5B531351U, 1845000 },
+    { 0x5BA0FF1EU, 1089000 },
+    { 0x5BEB3CE0U, 30762900 },
+    { 0x5C23AF9BU, 850000 },
+    { 0x5C55CB39U, 155000 },
+    { 0x5D1903F9U, 710000 },
+    { 0x5D56F01BU, 4788000 },
+    { 0x5E4327C8U, 845000 },
+    { 0x5EE005DAU, 1795000 },
+    { 0x6068AD86U, 335000 },
+    { 0x619C1B82U, 22849400 },
+    { 0x61FE4D6AU, 870000 },
+    { 0x6210CBB0U, 9000 },
+    { 0x6290F15BU, 3205300 },
+    { 0x6322B39AU, 2200000 },
+    { 0x63ABADE7U, 9000 },
+    { 0x64DE07A1U, 3800000 },
+    { 0x64F49967U, 1308000 },
+    { 0x665F785DU, 925000 },
+    { 0x669EB40AU, 15308750 },
+    { 0x66B4FC45U, 10000 },
+    { 0x67D2B389U, 500000 },
+    { 0x67D52852U, 13218750 },
+    { 0x6827CF72U, 2240000 },
+    { 0x6882FA73U, 48000 },
+    { 0x68A5D1EFU, 1550000 },
+    { 0x69F06B57U, 15000 },
+    { 0x6ABDF65EU, 245000 },
+    { 0x6B73A9BEU, 1288000 },
+    { 0x6CBD1D6DU, 1150000 },
+    { 0x6D19CCBCU, 38000 },
+    { 0x6D6F8F43U, 75000 },
+    { 0x6DBD6C0AU, 615000 },
+    { 0x6E8DA4F7U, 897000 },
+    { 0x6EF89CCCU, 2125000 },
+    { 0x6F039A67U, 812000 },
+    { 0x6F946279U, 485000 },
+    { 0x6FACDF31U, 48000 },
+    { 0x6FF0F727U, 149000 },
+    { 0x706E2B40U, 599000 },
+    { 0x707E63A4U, 816000 },
+    { 0x710A2B9BU, 370000 },
+    { 0x711D4738U, 11305000 },
+    { 0x71CB2FFBU, 24000 },
+    { 0x71CBEA98U, 940000 },
+    { 0x71D3B6F0U, 38703000 },
+    { 0x72934BE4U, 438000 },
+    { 0x72A4C31EU, 71000 },
+    { 0x734C5E50U, 745000 },
+    { 0x73920F8EU, 3295000 },
+    { 0x7397224CU, 1535000 },
+    { 0x73F4110EU, 957600 },
+    { 0x761E2AD3U, 2000000 },
+    { 0x767164D6U, 1950000 },
+    { 0x76D7C404U, 1900000 },
+    { 0x779B4F2DU, 420000 },
+    { 0x779F23AAU, 60000 },
+    { 0x780FFBD2U, 1630000 },
+    { 0x7836CE2FU, 9000 },
+    { 0x79178F0AU, 1620000 },
+    { 0x794CB30CU, 264000 },
+    { 0x7980BDD5U, 1800000 },
+    { 0x798682A2U, 26666500 },
+    { 0x79DD18AEU, 1775000 },
+    { 0x7A2EF5E4U, 885000 },
+    { 0x7B406EFBU, 2550000 },
+    { 0x7B47A6A7U, 650000 },
+    { 0x7B54A9D3U, 38902500 },
+    { 0x7B7E56F0U, 8977500 },
+    { 0x7B8AB45FU, 195000 },
+    { 0x7E8F677FU, 2700000 },
+    { 0x7F3415E3U, 378000 },
+    { 0x7F5C91F1U, 85000 },
+    { 0x7F81A829U, 26666500 },
+    { 0x806B9CC3U, 16000 },
+    { 0x810369E2U, 1000000 },
+    { 0x8125BCF9U, 8000 },
+    { 0x81634188U, 10000 },
+    { 0x81794C70U, 250000 },
+    { 0x817AFAADU, 815000 },
+    { 0x8198AEDCU, 2305000 },
+    { 0x81A9CDDFU, 36000 },
+    { 0x81BD2ED0U, 3450000 },
+    { 0x81E38F7FU, 116000 },
+    { 0x825A9F4CU, 375000 },
+    { 0x829A3C44U, 1385000 },
+    { 0x82CAC433U, 1250000 },
+    { 0x82E47E85U, 1280000 },
+    { 0x82E499FAU, 875000 },
+    { 0x83051506U, 12635000 },
+    { 0x83070B62U, 3318350 },
+    { 0x8408F33AU, 785000 },
+    { 0x84718D34U, 525000 },
+    { 0x8526E2F5U, 13218750 },
+    { 0x85E8E76BU, 1189000 },
+    { 0x8612B64BU, 22000 },
+    { 0x8644331AU, 1609000 },
+    { 0x86618EDAU, 400000 },
+    { 0x866BCE26U, 695000 },
+    { 0x86FE0B60U, 254000 },
+    { 0x877358ADU, 645000 },
+    { 0x885F3671U, 7315000 },
+    { 0x8911B9F5U, 145000 },
+    { 0x897AFC65U, 1375000 },
+    { 0x89BA59F5U, 23009000 },
+    { 0x8B13F083U, 30000 },
+    { 0x8B213907U, 3115000 },
+    { 0x8C2BD0DCU, 585000 },
+    { 0x8CB29A14U, 132000 },
+    { 0x8CF5CAE1U, 900000 },
+    { 0x8D45DF49U, 12095000 },
+    { 0x8D4B7A8AU, 2025000 },
+    { 0x8E08EC82U, 6583500 },
+    { 0x8E9254FBU, 26000 },
+    { 0x8F0E3594U, 38000 },
+    { 0x8F49AE28U, 26666500 },
+    { 0x8FB66F9BU, 10000 },
+    { 0x8FD54EBBU, 1862000 },
+    { 0x9114EADAU, 17955000 },
+    { 0x91373058U, 1615000 },
+    { 0x91CA96EEU, 1500000 },
+    { 0x920016F1U, 2295000 },
+    { 0x9229E4EBU, 475000 },
+    { 0x92EF6E04U, 1135000 },
+    { 0x92F5024EU, 608000 },
+    { 0x93F09558U, 1269000 },
+    { 0x94114926U, 678000 },
+    { 0x94204D89U, 12000 },
+    { 0x9472CD24U, 805000 },
+    { 0x94B395C5U, 32000 },
+    { 0x94DA98EFU, 375000 },
+    { 0x95466BDBU, 335000 },
+    { 0x9628879CU, 35000 },
+    { 0x96E24857U, 665000 },
+    { 0x9734F3EAU, 880000 },
+    { 0x97398A4BU, 695000 },
+    { 0x97553C28U, 1475000 },
+    { 0x97E55D11U, 300000 },
+    { 0x9804F4C7U, 12095000 },
+    { 0x98F65A5EU, 1510000 },
+    { 0x991EFC04U, 1878000 },
+    { 0x9A474B5EU, 1545000 },
+    { 0x9A9EB7DEU, 36575000 },
+    { 0x9AE6DDA1U, 155000 },
+    { 0x9B065C9EU, 1609000 },
+    { 0x9B16A3B4U, 31255000 },
+    { 0x9B909C94U, 15000 },
+    { 0x9C429B6AU, 450000 },
+    { 0x9C5E5644U, 3330000 },
+    { 0x9C669788U, 12000 },
+    { 0x9CF21E0FU, 20000 },
+    { 0x9CFFFC56U, 995000 },
+    { 0x9D0450CAU, 780000 },
+    { 0x9D96B45BU, 32000 },
+    { 0x9DAE1398U, 25536000 },
+    { 0x9F4B77BEU, 150000 },
+    { 0x9F6ED5A2U, 1875000 },
+    { 0xA0438767U, 100000 },
+    { 0xA09E15FDU, 37905000 },
+    { 0xA1355F67U, 17556000 },
+    { 0xA1B3A871U, 1970000 },
+    { 0xA29D6D10U, 975000 },
+    { 0xA29F78B0U, 909000 },
+    { 0xA31CB573U, 378000 },
+    { 0xA3FC0F4DU, 29000 },
+    { 0xA42FC3A5U, 1785000 },
+    { 0xA4A4E453U, 380000 },
+    { 0xA4D99B7DU, 1375000 },
+    { 0xA4F52C13U, 1740000 },
+    { 0xA52F6866U, 21213500 },
+    { 0xA5325278U, 67000 },
+    { 0xA6297CC8U, 1590000 },
+    { 0xA703E4A9U, 995000 },
+    { 0xA774B5A6U, 116000 },
+    { 0xA7CE1BC5U, 715000 },
+    { 0xA7DCC35CU, 21386400 },
+    { 0xA7EDE74DU, 10000 },
+    { 0xA8E38B01U, 130000 },
+    { 0xA960B13EU, 8000 },
+    { 0xA988D3A2U, 25000 },
+    { 0xA9EC907BU, 2765000 },
+    { 0xAA699BB6U, 25000 },
+    { 0xAA6F980AU, 38503500 },
+    { 0xAC33179CU, 915000 },
+    { 0xAC4E93C9U, 145000 },
+    { 0xAC5DF515U, 725000 },
+    { 0xAD6065C0U, 44555000 },
+    { 0xAE0A3D4FU, 1132000 },
+    { 0xAE12C99CU, 1269000 },
+    { 0xAE2BFE94U, 1263500 },
+    { 0xAED64A63U, 180000 },
+    { 0xAF0B8D48U, 2310000 },
+    { 0xAF599F01U, 630000 },
+    { 0xAF966F3CU, 875000 },
+    { 0xB1D95DA0U, 650000 },
+    { 0xB2A716A3U, 240000 },
+    { 0xB2CF7250U, 1900000 },
+    { 0xB2E046FBU, 1132000 },
+    { 0xB2FE5CF9U, 795000 },
+    { 0xB3206692U, 9000 },
+    { 0xB328B188U, 55000 },
+    { 0xB39B0AE6U, 6500000 },
+    { 0xB44F0582U, 69000 },
+    { 0xB472D2B5U, 565000 },
+    { 0xB4F32118U, 1675000 },
+    { 0xB52B5113U, 65000 },
+    { 0xB53C6C52U, 2275000 },
+    { 0xB5D306A4U, 1495000 },
+    { 0xB5EF4C33U, 3750000 },
+    { 0xB6410173U, 249000 },
+    { 0xB67597ECU, 10000 },
+    { 0xB6846A55U, 2475000 },
+    { 0xB779A091U, 1000000 },
+    { 0xB79C1BF5U, 1150000 },
+    { 0xB79F589EU, 10000000 },
+    { 0xB7D9F7F1U, 21080500 },
+    { 0xB802DD46U, 3000 },
+    { 0xB820ED5EU, 160000 },
+    { 0xB8D657ADU, 1995000 },
+    { 0xB8E2AE18U, 65000 },
+    { 0xB9210FD0U, 45000 },
+    { 0xB9CB3B69U, 18000 },
+    { 0xBA5334ACU, 498000 },
+    { 0xBB6B404FU, 9000 },
+    { 0xBB78956AU, 3465000 },
+    { 0xBBA2A2F7U, 30762900 },
+    { 0xBC32A33BU, 50000 },
+    { 0xBC5DC07EU, 1980000 },
+    { 0xBC7C0A00U, 2165000 },
+    { 0xBC993509U, 25000 },
+    { 0xBCDE91F0U, 330000 },
+    { 0xBD1B39C3U, 60000 },
+    { 0xBE0E6126U, 350000 },
+    { 0xBE11EFC6U, 21386400 },
+    { 0xBE819C63U, 30000 },
+    { 0xBF1691E0U, 448000 },
+    { 0xC0240885U, 995000 },
+    { 0xC07107EEU, 1325000 },
+    { 0xC1A8A914U, 1310000 },
+    { 0xC1AE4D16U, 100000 },
+    { 0xC1CE1183U, 4139900 },
+    { 0xC1E908D2U, 126000 },
+    { 0xC2974024U, 168990 },
+    { 0xC397F748U, 390000 },
+    { 0xC3D7C72BU, 99000 },
+    { 0xC3DDFDCEU, 55000 },
+    { 0xC3F25753U, 12967500 },
+    { 0xC4810400U, 2250000 },
+    { 0xC514AAE0U, 145000 },
+    { 0xC52C6B93U, 725000 },
+    { 0xC575DF11U, 705000 },
+    { 0xC58DA34AU, 1850000 },
+    { 0xC5DD6967U, 1596000 },
+    { 0xC7E55211U, 1625000 },
+    { 0xC96B73D9U, 315000 },
+    { 0xC972A155U, 2995000 },
+    { 0xC98BBAD6U, 520000 },
+    { 0xC9CEAF06U, 9000 },
+    { 0xC9E8FF76U, 5985000 },
+    { 0xCA495705U, 500000 },
+    { 0xCA62927AU, 240000 },
+    { 0xCABD11E8U, 9000 },
+    { 0xCADD5D2DU, 15000 },
+    { 0xCB0E7CD9U, 325000 },
+    { 0xCB642637U, 797000 },
+    { 0xCCE5C8FAU, 895000 },
+    { 0xCD93A7DBU, 7420140 },
+    { 0xCE0B9F22U, 1220000 },
+    { 0xCE44C4B9U, 1700000 },
+    { 0xCE6B35A4U, 550000 },
+    { 0xCEC6B9B7U, 21000 },
+    { 0xCEEA3F4BU, 450000 },
+    { 0xCFCFEB3BU, 50000 },
+    { 0xD039510BU, 38703000 },
+    { 0xD1AD4937U, 701000 },
+    { 0xD2D5E00EU, 196000 },
+    { 0xD2F77E37U, 22849400 },
+    { 0xD35698EFU, 31255000 },
+    { 0xD37B7976U, 80000 },
+    { 0xD4AE63D9U, 1815000 },
+    { 0xD556917CU, 15308750 },
+    { 0xD577C962U, 500000 },
+    { 0xD6BC7523U, 33117000 },
+    { 0xD6FB0F30U, 1132000 },
+    { 0xD756460CU, 29000 },
+    { 0xD757D97DU, 1925000 },
+    { 0xD7C56D39U, 648000 },
+    { 0xD80F4A44U, 1710000 },
+    { 0xD83C13CEU, 6000 },
+    { 0xD86A0247U, 2875000 },
+    { 0xD876DBE2U, 695000 },
+    { 0xD9927FE3U, 240000 },
+    { 0xD9F0503DU, 46284000 },
+    { 0xDA288376U, 12000 },
+    { 0xDA5819A3U, 385000 },
+    { 0xDA5EC7DAU, 1380000 },
+    { 0xDAC67112U, 60000 },
+    { 0xDB0C9B04U, 2150000 },
+    { 0xDB20A373U, 95000 },
+    { 0xDBA9DBFCU, 356000 },
+    { 0xDBF2D57AU, 558000 },
+    { 0xDC19D101U, 982000 },
+    { 0xDC434E51U, 35000 },
+    { 0xDCBCBE48U, 80000 },
+    { 0xDCE1D9F7U, 375000 },
+    { 0xDD71BFEBU, 30762900 },
+    { 0xDE05FB87U, 122000 },
+    { 0xDE3D9D22U, 95000 },
+    { 0xE18195B2U, 80000 },
+    { 0xE1C03AB0U, 1300000 },
+    { 0xE2504942U, 195000 },
+    { 0xE33A477BU, 495000 },
+    { 0xE505CF99U, 1715000 },
+    { 0xE550775BU, 905000 },
+    { 0xE5BA6858U, 81000 },
+    { 0xE62B361BU, 490000 },
+    { 0xE6401328U, 522000 },
+    { 0xE644E480U, 85000 },
+    { 0xE6E967F8U, 6118000 },
+    { 0xE78CC3D9U, 1610000 },
+    { 0xE7D2A16EU, 2225000 },
+    { 0xE80F67EEU, 277000 },
+    { 0xE823FB48U, 10000 },
+    { 0xE8983F9FU, 11305000 },
+    { 0xE8A8BA94U, 875000 },
+    { 0xE8A8BDA8U, 90000 },
+    { 0xE9805550U, 24000 },
+    { 0xE99011C2U, 2515000 },
+    { 0xEA313705U, 4350000 },
+    { 0xEA6A047FU, 835000 },
+    { 0xEB298297U, 75000 },
+    { 0xEBC24DF2U, 1600000 },
+    { 0xEC3E3404U, 1965000 },
+    { 0xEC8F7094U, 665000 },
+    { 0xECA6B6A3U, 2575000 },
+    { 0xED552C74U, 1955000 },
+    { 0xED62BFA9U, 3192000 },
+    { 0xED7EADA4U, 30000 },
+    { 0xEDA4ED97U, 11903500 },
+    { 0xEDC6F847U, 1100000 },
+    { 0xEDD516C6U, 35000 },
+    { 0xEE6024BCU, 795000 },
+    { 0xEEA75E63U, 1789000 },
+    { 0xEEF345ECU, 1590000 },
+    { 0xEF2295C9U, 251600 },
+    { 0xEF813606U, 2955000 },
+    { 0xF06C29C7U, 1380000 },
+    { 0xF0C2A91FU, 976000 },
+    { 0xF1B44F44U, 169000 },
+    { 0xF26CEFF9U, 10000 },
+    { 0xF330CB6AU, 790000 },
+    { 0xF34DFB25U, 21213500 },
+    { 0xF376F1E6U, 1100000 },
+    { 0xF38C4245U, 1225000 },
+    { 0xF4E1AA15U, 2000 },
+    { 0xF683EACAU, 925000 },
+    { 0xF77ADE32U, 275000 },
+    { 0xF79A00F7U, 9000 },
+    { 0xF8C2E0E7U, 345000 },
+    { 0xF8D48E7AU, 15000 },
+    { 0xF92AEC4DU, 1650000 },
+    { 0xF9300CC5U, 15000 },
+    { 0xF9E67C05U, 1130000 },
+    { 0xFAAD85EEU, 95000 },
+    { 0xFB133A17U, 25935000 },
+    { 0xFCC2F483U, 597000 },
+    { 0xFCFCB68BU, 1790000 },
+    { 0xFD128DFDU, 596000 },
+    { 0xFD231729U, 62000 },
+    { 0xFD707EDEU, 4123000 },
+    { 0xFE0A508CU, 59185000 },
+    { 0xFE141DA6U, 22543500 },
+    { 0xFE5F0722U, 1269000 },
+    { 0xFEFD644FU, 30000 },
+    { 0xFF22D208U, 8000 },
+    { 0xFFB15B5EU, 205000 },
 };
 
 static int GetPhase3GtacarsPurchasePrice(
@@ -6579,33 +6506,32 @@ static const char* GetPhase3VehicleClassName(
 static int GetPhase3ClassMarketFloor(
     int vehicleClass)
 {
-    // Replacement-value floors, not Sell prices. The configured resale
-    // percentage is applied later to the corrected market value.
+
     static const int kFloors[] =
     {
-        25000,    // Compacts
-        35000,    // Sedans
-        50000,    // SUVs
-        65000,    // Coupes
-        60000,    // Muscle
-        175000,   // Sports Classics
-        250000,   // Sports
-        650000,   // Super
-        45000,    // Motorcycles
-        80000,    // Off-road
-        120000,   // Industrial
-        50000,    // Utility
-        45000,    // Vans
-        1500,     // Cycles
-        175000,   // Boats
-        650000,   // Helicopters
-        750000,   // Planes
-        60000,    // Service
-        120000,   // Emergency
-        450000,   // Military
-        150000,   // Commercial
-        250000,   // Trains
-        1200000   // Open Wheel
+        25000,
+        35000,
+        50000,
+        65000,
+        60000,
+        175000,
+        250000,
+        650000,
+        45000,
+        80000,
+        120000,
+        50000,
+        45000,
+        1500,
+        175000,
+        650000,
+        750000,
+        60000,
+        120000,
+        450000,
+        150000,
+        250000,
+        1200000
     };
 
     if (vehicleClass < 0
@@ -6635,34 +6561,34 @@ static int GetPhase3InstalledModRetailValue(
 
     switch (slot)
     {
-    case 11: // Engine
+    case 11:
         return 8000 + level * 7000;
 
-    case 12: // Brakes
+    case 12:
         return 7000 + level * 6500;
 
-    case 13: // Transmission
+    case 13:
         return 8000 + level * 7500;
 
-    case 15: // Suspension
+    case 15:
         return 5000 + level * 5000;
 
-    case 16: // Armor
+    case 16:
         return 15000 + level * 14000;
 
-    case 23: // Front wheels
-    case 24: // Rear wheels
+    case 23:
+    case 24:
         return 9000
             + (level > 20
                 ? 20000
                 : level * 1000);
 
-    case 38: // Hydraulics
+    case 38:
         return 30000 + level * 5000;
 
-    case 39: // Engine block
-    case 40: // Air filter
-    case 41: // Struts
+    case 39:
+    case 40:
+    case 41:
         return 8000 + level * 2500;
 
     default:
@@ -6715,7 +6641,7 @@ static int EstimatePhase3CustomizationRetailValue(
          slot <= 48;
          ++slot)
     {
-        // Known toggle/unused slots are handled separately below.
+
         if (slot >= 17 && slot <= 22)
             continue;
 
@@ -6763,20 +6689,20 @@ static int EstimatePhase3CustomizationRetailValue(
 
     if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 18))
     {
-        total += 50000; // Turbo
+        total += 50000;
         ++toggleModCount;
         ++performanceModCount;
     }
 
     if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 20))
     {
-        total += 4000; // Tire smoke
+        total += 4000;
         ++toggleModCount;
     }
 
     if (VEHICLE::IS_TOGGLE_MOD_ON(vehicle, 22))
     {
-        total += 7500; // Xenon lights
+        total += 7500;
         ++toggleModCount;
     }
 
@@ -6815,9 +6741,7 @@ static bool EstimatePhase3VehicleSellPrice(
 
     if (estimate.gtacarsPurchasePrice > 0)
     {
-        // For known native vehicles, GTACars acquisition pricing is the
-        // authoritative stock-value basis. Do not let nMonetaryValue drag
-        // expensive Online-era vehicles down to traffic-car prices.
+
         estimate.baseMarketValue =
             estimate.gtacarsPurchasePrice;
     }
@@ -6837,9 +6761,6 @@ static bool EstimatePhase3VehicleSellPrice(
             estimate.performanceModCount,
             estimate.toggleModCount);
 
-    // Configurable resale estimate:
-    // VehicleSellPercent of corrected stock value plus UpgradePercent of the
-    // estimated retail value of installed upgrades.
     int64_t sellPrice =
         static_cast<int64_t>(
             estimate.baseMarketValue)
@@ -6880,8 +6801,6 @@ static bool EstimatePhase3VehicleSellPrice(
         else if (engineHealth > 1000.0f)
             engineHealth = 1000.0f;
 
-        // Use the worse of body/engine condition. A vehicle that is 20%
-        // damaged therefore loses 20% of its calculated resale value.
         const float conditionHealth =
             bodyHealth < engineHealth
                 ? bodyHealth
@@ -6969,10 +6888,6 @@ static void UpdatePhase3PreparedSellPrice()
     const Hash model =
         ENTITY::GET_ENTITY_MODEL(vehicle);
 
-    // Recalculate only when the vehicle changes or the player changes LSC
-    // menus. Returning from an upgrade category to the main menu therefore
-    // picks up newly installed modifications without repeatedly scanning all
-    // mod slots while the player simply sits on one menu.
     if (g_phase3PreparedSellPriceValid
         && vehicle == g_phase3PreparedVehicle
         && model == g_phase3PreparedModel
@@ -7334,8 +7249,7 @@ static void UpdatePhase3SellControlStateFast()
 
             if (!g_phase3SellStageActive)
             {
-                // Re-estimate on the next Sell entry so upgrades installed
-                // during this LSC visit are reflected in resale value.
+
                 g_phase3FallbackVehicle = 0;
                 g_phase3FallbackModel = 0;
                 g_phase3FallbackPrice = 0;
@@ -7526,9 +7440,6 @@ static void Phase3SellDisplayPriceRegisterHook(
         return;
     }
 
-    // SECURITY::REGISTER_SCRIPT_VARIABLE receives INT*. Only modify the call
-    // whose pointer is exactly the structurally resolved iOptionCost[0] stack
-    // slot. Every other registration is a pure pass-through.
     if (g_stockLscScopeActive
         && g_carmodShopActive
         && !g_lastNetworkGame
@@ -7580,8 +7491,6 @@ static void Phase3SellDisplayPriceRegisterHook(
                     static_cast<int32_t>(
                         correctedPrice);
 
-                // Write before calling Rockstar's security native so its
-                // protected shadow copy records the corrected value too.
                 std::memcpy(
                     expectedSlot,
                     &corrected,
@@ -7932,10 +7841,6 @@ static bool ReactivateCachedStockLscPatches(
     g_phase2PatchApplied = true;
     g_phase2VisibilityBypassActive = true;
 
-    // Cached reactivation is event-driven, but several VirtualProtect calls
-    // back-to-back can still produce a visible one-frame spike. We have ample
-    // distance before the garage at scope activation, so distribute the
-    // already-resolved writes across frames while carmod_shop is still idle.
     if (!g_carmodShopActive)
         WAIT(0);
 
@@ -8033,7 +7938,7 @@ static bool ReactivateCachedStockLscPatches(
     ApplyCharacterVehicleSettingForShop();
 
     Logf(
-        "[Performance] cached LSC patch set reactivated incrementally without structural scan");
+        "[Runtime] LSC patches activated from startup cache");
 
     return true;
 }
@@ -8169,9 +8074,6 @@ static void RestoreStockLscPatches(
     if (restoreFailed)
         return;
 
-    // Keep the validated structural cache. Only runtime/session state is
-    // cleared here, so the next LSC approach requires a few direct writes
-    // instead of rebuilding the entire ScriptVM function/string catalog.
     g_phase3PriceThreadInfo =
         Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
@@ -8194,8 +8096,7 @@ static bool IsPhase3PcAtNativeSite(
     uint32_t programCounter,
     uint32_t site)
 {
-    // The VM context can point at the NATIVE itself or just after its 4-byte
-    // instruction while the handler is executing.
+
     return site != 0
         && programCounter >= site
         && programCounter <= site + 8;
@@ -8279,7 +8180,6 @@ static bool DecodePhase3HelperPredicateShape(
 
     position += 3;
 
-    // GTA V ScriptVM opcode 0x47 is IOFFSET_S16_LOAD.
     unsigned char* offsetLoad =
         ScriptCodePointer(program, position);
     if (!offsetLoad || *offsetLoad != 0x47)
@@ -8451,9 +8351,6 @@ static void RunPhase3NativeProbe(
     if (!original || original == probe.detour)
         return;
 
-    // Phase 3F fast path: outside an active marked Sell submenu, these hooks
-    // are pure pass-through. Do not inspect arguments, scan the thread array,
-    // decode pointers, or touch the log file.
     if (!g_carmodShopActive
         || !g_rootMarkerSet
         || !g_phase3SellHandlerResolved
@@ -8490,7 +8387,6 @@ static void RunPhase3NativeProbe(
         }
     }
 
-    // Preserve Rockstar's original return value before inspecting the result.
     original(context);
     ++probe.calls;
 
@@ -8618,8 +8514,6 @@ static void RunPhase3NativeProbe(
 
     ++probe.matchedCalls;
 
-    // Do not synchronously hit the log file for an identical state every frame.
-    // We still count every matched call, but only state transitions are emitted.
     const bool duplicateState =
         probe.hasLoggedState
         && probe.lastLoggedSite == matchedSite
@@ -8648,11 +8542,6 @@ static void RunPhase3NativeProbe(
     probe.lastLoggedReturnReadable = returnReadable;
     probe.lastLoggedFrameLocal2Readable = frameLocal2Readable;
 
-    // Phase 3G: when the CMOD_SEL string-state gate transitions true, the
-    // Sell handler immediately enters a short chain of helper functions that
-    // each contain their own NETWORK_IS_GAME_IN_PROGRESS check. Arm a very
-    // small synchronous trace window here so the helper network-native hook
-    // can identify exactly which helper branches Rockstar executes next.
     if (slot == 7
         && returnReadable
         && (returnRaw & 0xFFULL) != 0
@@ -8985,11 +8874,6 @@ static bool InstallPhase3SellGateProbes(
     Phase3NativeHandler* table =
         reinterpret_cast<Phase3NativeHandler*>(program->nativeOffset);
 
-    // Phase 3G: structurally collect the small helper functions called after
-    // the CMOD_SEL string-state gate. We only retain direct callees that
-    // contain exactly one NETWORK_IS_GAME_IN_PROGRESS native reference.
-    // This avoids build-specific function numbers and gives the runtime helper
-    // tracer a tiny set of exact native PCs to recognize.
     g_phase3HelperGateSiteCount = 0;
 
     uint32_t helperScan = selected[7].position + 4;
@@ -9407,10 +9291,6 @@ static void UpdatePhase3Diagnostics()
             program,
             sellHandler);
 
-    // Keep the old synchronous diagnostic probes disabled. The one exception
-    // is a single low-frequency REGISTER_SCRIPT_VARIABLE hook used only to
-    // correct iOptionCost[0] before Rockstar composes the Sell price text.
-    // It performs no thread scan, no VM discovery, and no synchronous logging.
     ResetPhase3NativeProbeState();
 
     const bool sellPriceDisplayHookInstalled =
@@ -9476,8 +9356,7 @@ static void PrepareStructuralCache()
 
     if (visibilityResolved)
     {
-        // Spread the two expensive one-time discovery stages across frames.
-        // No patch is active while this cache-only preparation is running.
+
         WAIT(0);
         UpdatePhase3Diagnostics();
     }
@@ -9486,8 +9365,7 @@ static void PrepareStructuralCache()
 
     if (!g_structuralCacheReady)
     {
-        // Startup initialization may retry, but the live LSC vicinity path
-        // is never allowed to perform structural discovery.
+
         g_phase3AnalyzedProgram = nullptr;
         g_phase2AttemptedProgram = nullptr;
 
@@ -9497,7 +9375,7 @@ static void PrepareStructuralCache()
     }
 
     Logf(
-        "[Performance] startup structural cache ready program=%p; no LSC bytecode/native hooks active",
+        "[Startup] structural cache ready program=%p; LSC patches remain inactive until needed",
         program);
 }
 
@@ -9673,10 +9551,6 @@ static bool InitializeStructuralCacheAtStartup()
     Logf(
         "[Startup] requesting carmod_shop bytecode for structural initialization");
 
-    // Keep the streamed program requested for this script's lifetime. We do
-    // not start carmod_shop here; requesting it only ensures its bytecode is
-    // resident so all structural discovery can be completed before runtime
-    // proximity activation begins.
     RequestScriptProgramByHash(
         kCarmodShopHash);
     g_startupCarmodProgramPinned = true;
@@ -9712,9 +9586,6 @@ static bool InitializeStructuralCacheAtStartup()
     Logf(
         "[Startup] carmod_shop bytecode loaded; beginning one-time structural discovery");
 
-    // Discovery is allowed only here. A failed startup resolution may retry a
-    // small number of times during startup, but the live LSC/Beeker's vicinity
-    // path never invokes any structural scanner or fallback resolver.
     static constexpr int kStartupStructuralAttempts = 3;
 
     for (int attempt = 1;
@@ -9884,10 +9755,7 @@ static void LogVehicleSnapshot(
 
 static bool WasFrontendControlJustPressed(int control)
 {
-    // Depending on the current carmod_shop menu state Rockstar can leave the
-    // frontend control enabled or disable it and query the disabled-control
-    // state. Check both paths so Phase 3 tracing does not miss confirmation
-    // presses when the menu changes input ownership.
+
     return CONTROLS::IS_CONTROL_JUST_PRESSED(2, control)
         || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, control);
 }
@@ -9939,8 +9807,6 @@ static bool LogControlIfPressed(
     LogVehicleSnapshot("menu input", false);
     LogPhase3SellPriceState("menu input");
 
-    // Phase 3K: do not arm runtime Sell tracing from menu accepts.
-    // Menu input/depth diagnostics remain available without per-frame VM polling.
     return true;
 }
 
@@ -10157,7 +10023,6 @@ static void PollScriptStates()
 {
     bool carmodShopNowActive = false;
 
-    // carmod_shop is the only runtime script probe.
     const size_t probeCount =
         kScriptProbeCount;
 
@@ -10275,8 +10140,6 @@ static void LoadSettings()
             "Notification",
             false);
 
-    // Keep percentages flexible for modders while preventing accidental
-    // negative values or extreme overflow-prone settings.
     if (g_vehicleSellPercent < 0)
         g_vehicleSellPercent = 0;
     else if (g_vehicleSellPercent > 1000)
@@ -10354,38 +10217,36 @@ static void LoadSettings()
 static void LogStartupState()
 {
     Logf("SellVehiclesAtLSC starting...");
-    Logf("[Info] BuildTag=%s", kBuildTag);
-    Logf("[Info] Executable=%s", GetExecutableName());
-    Logf("[Info] Edition=%s", GetEditionName());
-    Logf("[Info] getGameVersion()=%d", getGameVersion());
+    Logf("[Info] Version=%s", kBuildTag);
     Logf(
-        "[Info] Settings enabled=%s logging=%s debugLogging=%s notification=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d useDamagePenalty=%s allowCharacterVehicles=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        "[Info] Game edition=%s version=%d executable=%s",
+        GetEditionName(),
+        getGameVersion(),
+        GetExecutableName());
+    Logf(
+        "[Settings] enabled=%s logging=%s debugLogging=%s notification=%s sellCooldown=%s cooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d damagePenalty=%s characterVehicles=%s",
         g_enabled ? "yes" : "no",
         g_logEnabled ? "on" : "off",
         g_debugLoggingEnabled ? "on" : "off",
         g_showStartupNotification ? "on" : "off",
-        g_useSellCooldown ? "yes" : "no",
+        g_useSellCooldown ? "on" : "off",
         g_sellCooldownMinutes,
         g_vehicleSellPercent,
         g_upgradePercent,
-        g_useDamagePenalty ? "yes" : "no",
-        g_allowCharacterVehicles ? "yes" : "no",
+        g_useDamagePenalty ? "on" : "off",
+        g_allowCharacterVehicles ? "allowed" : "blocked");
+    Logf(
+        "[Diagnostics] controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d resolver=%s sellFlow=%s",
         g_logControls ? "on" : "off",
         g_logVehicleSnapshots ? "on" : "off",
         g_scriptPollIntervalMs,
         g_snapshotIntervalMs,
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
-    Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles. VehicleSellPercent=%d applies to corrected stock value and UpgradePercent=%d applies to estimated installed-upgrade retail value before the final price is injected into Rockstar's registered iOptionCost[0]. Missing/newer/add-on models use the class/model fallback.", g_vehicleSellPercent, g_upgradePercent);
-    Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
-    Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
-    Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
-    Logf("[Info] Gameplay cooldown preserves Rockstar's native CMOD_NOSELL3 Sell gate. Story Mode rejects writes to MPPLY_VEHICLE_SELL_TIME, so an exact-site clock hook supplies the elapsed value only to Rockstar's original cooldown comparison. SellCooldownMinutes controls that elapsed window without patching the rejection message or unrelated eligibility checks.");
-    Logf("[Info] UseDamagePenalty=%s scales the configured resale price by the worse of body/engine condition. AllowCharacterVehicles=%s uses Rockstar's SP protagonist model+plate definitions to suppress the injected Sell category for those character vehicles.", g_useDamagePenalty ? "on" : "off", g_allowCharacterVehicles ? "yes" : "no");
-    Logf("[Info] Scope/performance: structural Sell discovery is cached once without modifying carmod_shop. Active VM patches/native hooks are enabled only near the four stock Los Santos Customs locations (Burton, LSIA, La Mesa, Harmony), restored outside with 180m hysteresis, and reactivated from cached addresses without rescanning. Beeker's and other customization garages are not patched.");
-    Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
-    Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
+    Logf(
+        "[Info] Structural discovery runs once at startup; LSC activation uses cached locations only.");
+    Logf(
+        "[Info] Supported shops: Burton, LSIA, La Mesa, Harmony. Beeker's Garage is excluded.");
 }
 
 void ScriptMain()
@@ -10434,11 +10295,6 @@ void ScriptMain()
             "~b~~h~SellVehiclesAtLSC~h~~w~ enabled.");
     }
 
-    // PERFORMANCE RULE:
-    // Structural discovery is startup-only. The live LSC tick may reactivate
-    // cached bytecode/native-handler locations, but must never scan the VM,
-    // rebuild function catalogs, search script strings, or perform a fallback
-    // structural resolution near LSC or Beeker's.
     while (true)
     {
         WAIT(0);
