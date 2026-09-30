@@ -9595,6 +9595,108 @@ static bool HasScriptLoadedByHash(uint32_t scriptHash)
     return result && (*result != 0);
 }
 
+static void RequestScriptProgramByHash(uint32_t scriptHash)
+{
+    nativeInit(kRequestScriptWithNameHashNative);
+    nativePush64(static_cast<uint64_t>(scriptHash));
+    nativeCall();
+}
+
+static bool InitializeStructuralCacheAtStartup()
+{
+    if (g_structuralCacheReady
+        && g_startupStructuralInitializationComplete)
+    {
+        return true;
+    }
+
+    if (g_lastNetworkGame
+        || !g_phase2Enabled
+        || !g_phase3Enabled)
+    {
+        return false;
+    }
+
+    Logf(
+        "[Startup] requesting carmod_shop bytecode for structural initialization");
+
+    // Keep the streamed program requested for this script's lifetime. We do
+    // not start carmod_shop here; requesting it only ensures its bytecode is
+    // resident so all structural discovery can be completed before runtime
+    // proximity activation begins.
+    RequestScriptProgramByHash(
+        kCarmodShopHash);
+    g_startupCarmodProgramPinned = true;
+
+    const ULONGLONG loadDeadline =
+        GetTickCount64() + 10000ULL;
+    ULONGLONG nextRequestAt = 0;
+
+    while (!HasScriptLoadedByHash(
+                kCarmodShopHash))
+    {
+        const ULONGLONG now =
+            GetTickCount64();
+
+        if (now >= loadDeadline)
+        {
+            Logf(
+                "[Startup] structural initialization failed: carmod_shop bytecode did not load within startup window");
+            return false;
+        }
+
+        if (now >= nextRequestAt)
+        {
+            RequestScriptProgramByHash(
+                kCarmodShopHash);
+            nextRequestAt =
+                now + 100ULL;
+        }
+
+        WAIT(0);
+    }
+
+    Logf(
+        "[Startup] carmod_shop bytecode loaded; beginning one-time structural discovery");
+
+    // Discovery is allowed only here. A failed startup resolution may retry a
+    // small number of times during startup, but the live LSC/Beeker's vicinity
+    // path never invokes any structural scanner or fallback resolver.
+    static constexpr int kStartupStructuralAttempts = 3;
+
+    for (int attempt = 1;
+         attempt <= kStartupStructuralAttempts;
+         ++attempt)
+    {
+        PrepareStructuralCache();
+
+        if (g_structuralCacheReady)
+        {
+            g_startupStructuralInitializationComplete =
+                true;
+
+            Logf(
+                "[Startup] structural initialization complete attempt=%d program=%p; runtime vicinity path is cache-only",
+                attempt,
+                g_phase2PatchedProgram);
+
+            return true;
+        }
+
+        Logf(
+            "[Startup] structural initialization attempt=%d incomplete",
+            attempt);
+
+        WAIT(0);
+    }
+
+    Logf(
+        "[Startup] structural initialization failed after %d attempts; live vicinity discovery remains disabled",
+        kStartupStructuralAttempts);
+
+    return false;
+}
+
 static int GetRunningScriptCountByHash(uint32_t scriptHash)
 {
     nativeInit(kGetNumberOfThreadsRunningScriptHashNative);
@@ -10259,17 +10361,18 @@ void ScriptMain()
     const bool phase2Ready =
         InitializePhase2Internals();
 
-    if (phase2Ready)
+    if (phase2Ready
+        && InitializeStructuralCacheAtStartup())
     {
-        PrepareStructuralCache();
-
         WriteStatusLogLine(
             "SellVehiclesAtLSC Initialized");
     }
     else
     {
         Logf(
-            "[Init] SellVehiclesAtLSC initialization failed: Phase 2 internals unavailable");
+            "[Init] SellVehiclesAtLSC startup initialization failed; runtime structural discovery is disabled");
+        WriteStatusLogLine(
+            "SellVehiclesAtLSC Initialization Failed");
     }
 
     if (g_showStartupNotification)
@@ -10279,10 +10382,10 @@ void ScriptMain()
     }
 
     // PERFORMANCE RULE:
-    // Keep the live LSC tick lightweight. Do not add full VM/thread scans,
-    // repeated structural discovery, synchronous file I/O, or other expensive
-    // work here. Cache stable results and make heavier work event-driven or
-    // rate-limited outside the per-frame path.
+    // Structural discovery is startup-only. The live LSC tick may reactivate
+    // cached bytecode/native-handler locations, but must never scan the VM,
+    // rebuild function catalogs, search script strings, or perform a fallback
+    // structural resolution near LSC or Beeker's.
     while (true)
     {
         WAIT(0);
