@@ -13,11 +13,13 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.19 native Sell cooldown gate hook";
+static const char* kBuildTag = "v0.3.20 configurable pricing and logging";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
 static int g_sellCooldownMinutes = 48;
+static int g_vehicleSellPercent = 60;
+static int g_upgradePercent = 8;
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -6040,8 +6042,8 @@ static const char* GetPhase3VehicleClassName(
 static int GetPhase3ClassMarketFloor(
     int vehicleClass)
 {
-    // Replacement-value floors, not Sell prices. Stock resale is calculated
-    // from 60% of the corrected market value.
+    // Replacement-value floors, not Sell prices. The configured resale
+    // percentage is applied later to the corrected market value.
     static const int kFloors[] =
     {
         25000,    // Compacts
@@ -6298,17 +6300,22 @@ static bool EstimatePhase3VehicleSellPrice(
             estimate.performanceModCount,
             estimate.toggleModCount);
 
-    // GTA-style resale estimate:
-    // 60% of corrected stock value + 50% of installed upgrade retail value.
+    // Configurable resale estimate:
+    // VehicleSellPercent of corrected stock value plus UpgradePercent of the
+    // estimated retail value of installed upgrades.
     int64_t sellPrice =
         static_cast<int64_t>(
             estimate.baseMarketValue)
-            * 60LL / 100LL;
+            * static_cast<int64_t>(
+                g_vehicleSellPercent)
+            / 100LL;
 
     sellPrice +=
         static_cast<int64_t>(
             estimate.customizationRetailValue)
-            * 50LL / 100LL;
+            * static_cast<int64_t>(
+                g_upgradePercent)
+            / 100LL;
 
     if (sellPrice <= 0)
         return false;
@@ -6566,15 +6573,13 @@ static void UpdatePhase3SellPriceFallback()
         }
 
         const int finalPrice =
-            rockstarPrice > estimate.dynamicSellPrice
-                ? static_cast<int>(rockstarPrice)
-                : estimate.dynamicSellPrice;
+            estimate.dynamicSellPrice;
 
         g_phase3FallbackPrice =
             finalPrice;
 
         Logf(
-            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d gtacarsPurchase=%d classFloor=%d baseMarket=%d customizationRetail=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
+            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d gtacarsPurchase=%d classFloor=%d baseMarket=%d vehicleSellPercent=%d customizationRetail=%d upgradePercent=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
             static_cast<int>(vehicle),
             static_cast<unsigned int>(model),
             estimate.vehicleClass,
@@ -6585,18 +6590,17 @@ static void UpdatePhase3SellPriceFallback()
             estimate.gtacarsPurchasePrice,
             estimate.classMarketFloor,
             estimate.baseMarketValue,
+            g_vehicleSellPercent,
             estimate.customizationRetailValue,
+            g_upgradePercent,
             estimate.installedModCount,
             estimate.performanceModCount,
             estimate.toggleModCount,
             estimate.dynamicSellPrice,
             finalPrice,
-            rockstarPrice
-                    > estimate.dynamicSellPrice
-                ? "rockstar"
-                : (estimate.gtacarsPurchasePrice > 0
-                    ? "gtacars"
-                    : "dynamic-fallback"));
+            estimate.gtacarsPurchasePrice > 0
+                ? "gtacars"
+                : "dynamic-fallback");
 
         g_phase3FallbackLogged = true;
     }
@@ -6961,11 +6965,7 @@ static void Phase3SellDisplayPriceRegisterHook(
                 sizeof(rockstarInitial));
 
             const int correctedPrice =
-                rockstarInitial
-                    > g_phase3PreparedSellPrice
-                ? static_cast<int>(
-                    rockstarInitial)
-                : g_phase3PreparedSellPrice;
+                g_phase3PreparedSellPrice;
 
             if (correctedPrice > 0
                 && correctedPrice
@@ -9147,8 +9147,41 @@ static void LoadSettings()
     if (g_sellCooldownMinutes < 1)
         g_sellCooldownMinutes = 1;
 
+    g_vehicleSellPercent =
+        ReadIniInt(
+            "Settings",
+            "VehicleSellPercent",
+            60);
+
+    g_upgradePercent =
+        ReadIniInt(
+            "Settings",
+            "UpgradePercent",
+            8);
+
+    // Keep percentages flexible for modders while preventing accidental
+    // negative values or extreme overflow-prone settings.
+    if (g_vehicleSellPercent < 0)
+        g_vehicleSellPercent = 0;
+    else if (g_vehicleSellPercent > 1000)
+        g_vehicleSellPercent = 1000;
+
+    if (g_upgradePercent < 0)
+        g_upgradePercent = 0;
+    else if (g_upgradePercent > 1000)
+        g_upgradePercent = 1000;
+
+    const bool legacyLogEnabled =
+        ReadIniInt(
+            "Diagnostics",
+            "EnableLog",
+            1) != 0;
+
     g_logEnabled =
-        ReadIniInt("Diagnostics", "EnableLog", 1) != 0;
+        ReadIniBool(
+            "Settings",
+            "Logging",
+            legacyLogEnabled);
 
     g_showStartupNotification =
         ReadIniInt(
@@ -9210,11 +9243,13 @@ static void LogStartupState()
     Logf("[Info] Edition=%s", GetEditionName());
     Logf("[Info] getGameVersion()=%d", getGameVersion());
     Logf(
-        "[Info] Settings enabled=%s useSellCooldown=%s sellCooldownMinutes=%d log=%s startupNotification=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        "[Info] Settings enabled=%s logging=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d startupNotification=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
         g_enabled ? "yes" : "no",
+        g_logEnabled ? "on" : "off",
         g_useSellCooldown ? "yes" : "no",
         g_sellCooldownMinutes,
-        g_logEnabled ? "on" : "off",
+        g_vehicleSellPercent,
+        g_upgradePercent,
         g_showStartupNotification ? "on" : "off",
         g_logControls ? "on" : "off",
         g_logVehicleSnapshots ? "on" : "off",
@@ -9223,7 +9258,7 @@ static void LogStartupState()
         g_phase2Enabled ? "on" : "off",
         g_phase3Enabled ? "on" : "off");
     Logf("[Info] Phase 2 preserves the Phase 1B diagnostics and structurally resolves carmod_shop's category-42 visibility call at runtime. It does not use decompiler function numbers, spoof NETWORK_IS_GAME_IN_PROGRESS, or write script locals, vehicle state, or money state.");
-    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles, applies the 60%% resale basis plus 50%% of estimated installed upgrade value, and injects that final value into Rockstar's registered iOptionCost[0] before the native Sell menu composes its ITEM_COST text. Missing/newer/add-on models use the class/model fallback.");
+    Logf("[Info] Phase 3N uses GTACars-derived purchase prices as the primary stock-value reference for known native GTA vehicles. VehicleSellPercent=%d applies to corrected stock value and UpgradePercent=%d applies to estimated installed-upgrade retail value before the final price is injected into Rockstar's registered iOptionCost[0]. Missing/newer/add-on models use the class/model fallback.", g_vehicleSellPercent, g_upgradePercent);
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
