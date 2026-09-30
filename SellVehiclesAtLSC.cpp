@@ -105,7 +105,8 @@ static const StockLscPoint kStockLscPoints[] =
     { 1174.811f, 2649.954f, 37.37151f, "Harmony" }
 };
 
-static constexpr float kStockLscPatchRadius = 140.0f;
+static constexpr float kStockLscActivationRadius = 140.0f;
+static constexpr float kStockLscDeactivationRadius = 180.0f;
 
 struct VehicleSnapshot
 {
@@ -477,9 +478,13 @@ static bool IsPlayerNearStockLsc()
             entity,
             true);
 
+    const float radius =
+        g_stockLscScopeActive
+            ? kStockLscDeactivationRadius
+            : kStockLscActivationRadius;
+
     const float radiusSquared =
-        kStockLscPatchRadius
-        * kStockLscPatchRadius;
+        radius * radius;
 
     for (size_t i = 0;
          i < sizeof(kStockLscPoints)
@@ -503,6 +508,47 @@ static bool IsPlayerNearStockLsc()
 
 static void RestoreStockLscPatches(
     const char* reason);
+static void EndCarmodShopSession();
+
+static void UpdateStockLscScope(
+    ULONGLONG now)
+{
+    if (now < g_nextStockLscScopeCheckAt)
+        return;
+
+    const bool nearStockLsc =
+        IsPlayerNearStockLsc();
+
+    g_nextStockLscScopeCheckAt =
+        now
+        + (nearStockLsc
+            ? kStockLscScopePollInsideMs
+            : kStockLscScopePollOutsideMs);
+
+    if (nearStockLsc
+        == g_stockLscScopeActive)
+    {
+        return;
+    }
+
+    g_stockLscScopeActive =
+        nearStockLsc;
+    g_nextPhase2ProgramCheckAt = 0;
+    g_nextScriptPollAt = 0;
+    g_nextPhase3ControlUpdateAt = 0;
+
+    if (!g_stockLscScopeActive)
+    {
+        if (g_carmodShopActive)
+        {
+            g_carmodShopActive = false;
+            EndCarmodShopSession();
+        }
+
+        RestoreStockLscPatches(
+            "left stock Los Santos Customs scope");
+    }
+}
 
 static const char* GetExecutableName()
 {
@@ -644,6 +690,9 @@ static constexpr unsigned char kVmArrayU8 = 0x34;
 static constexpr unsigned char kVmArrayU8Load = 0x35;
 static constexpr unsigned char kVmStaticU16 = 0x4F;
 static constexpr unsigned char kVmIoffsetS16 = 0x46;
+
+static bool ReactivateCachedStockLscPatches(
+    Phase2ScrProgram* program);
 
 static bool g_phase2InternalsInitialized = false;
 static bool g_phase2ProgramResolverReady = false;
@@ -2168,17 +2217,8 @@ static void RestoreCharacterVehicleSettingAfterShop()
 
 static void UpdatePhase2SellExposure()
 {
-    g_stockLscScopeActive =
-        IsPlayerNearStockLsc();
-
-    if (!g_stockLscScopeActive)
-    {
-        RestoreStockLscPatches(
-            "outside stock Los Santos Customs");
-        return;
-    }
-
-    if (!g_phase2Enabled
+    if (!g_stockLscScopeActive
+        || !g_phase2Enabled
         || g_lastNetworkGame
         || !InitializePhase2Internals())
     {
@@ -2287,11 +2327,33 @@ static void UpdatePhase2SellExposure()
     }
 
     if (!program
-        || g_phase2PatchApplied
-        || g_phase2AttemptedProgram == program)
+        || g_phase2PatchApplied)
     {
         return;
     }
+
+    if (g_structuralCacheReady
+        && program == g_phase2PatchedProgram
+        && program == g_phase3AnalyzedProgram)
+    {
+        if (ReactivateCachedStockLscPatches(
+                program))
+        {
+            g_nextPhase2ProgramCheckAt =
+                now + 1000ULL;
+            return;
+        }
+
+        // A cached write failing is a real compatibility/runtime failure.
+        // Do not fall through into expensive rediscovery every frame.
+        g_structuralCacheReady = false;
+        Logf(
+            "[Performance] cached LSC patch reactivation failed");
+        return;
+    }
+
+    if (g_phase2AttemptedProgram == program)
+        return;
 
     g_phase2AttemptedProgram = program;
 
