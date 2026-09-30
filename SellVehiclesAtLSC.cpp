@@ -7805,6 +7805,16 @@ static void FlushPhase3SellCooldownGateEvent()
 static void RestoreStockLscPatches(
     const char* reason)
 {
+    const bool hasScopedPatchState =
+        g_phase2PatchApplied
+        || g_highValueSellPatchApplied
+        || g_sellOwnershipPatchApplied
+        || g_phase3SellDisplayPriceHook.installed
+        || g_phase3SellCooldownHook.installed;
+
+    if (!hasScopedPatchState)
+        return;
+
     bool restoreFailed = false;
 
     if (g_phase3SellCooldownHook.installed
@@ -10027,7 +10037,7 @@ void ScriptMain()
 
         if (now >= g_nextLogFlushAt)
         {
-            if (!g_carmodShopActive)
+            if (g_debugLogActive)
                 FlushLogBuffer();
 
             g_nextLogFlushAt =
@@ -10048,9 +10058,12 @@ void ScriptMain()
         UpdatePhase3Diagnostics();
         UpdatePhase3SellPriceFallback();
         UpdatePhase3SellControlStateFast();
-        LogManualMarker();
 
-        if (g_carmodShopActive
+        if (g_debugLogActive)
+            LogManualMarker();
+
+        if (g_debugLogActive
+            && g_carmodShopActive
             && g_logControls)
         {
             bool acceptPressed = false;
