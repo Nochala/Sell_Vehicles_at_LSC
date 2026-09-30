@@ -84,6 +84,7 @@ static bool g_stockLscScopeActive = false;
 static ULONGLONG g_nextStockLscScopeCheckAt = 0;
 static ULONGLONG g_nextPhase3ControlUpdateAt = 0;
 static bool g_prepareStructuralCacheOnly = false;
+static bool g_structuralCacheReady = false;
 static constexpr ULONGLONG kStockLscScopePollOutsideMs = 250ULL;
 static constexpr ULONGLONG kStockLscScopePollInsideMs = 100ULL;
 static constexpr ULONGLONG kPhase3ControlUpdateIntervalMs = 16ULL;
@@ -1939,6 +1940,16 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         patch,
         sizeof(g_phase2VisibilityPatch));
 
+    if (g_prepareStructuralCacheOnly)
+    {
+        g_phase2PatchedProgram = program;
+        g_phase2PatchPosition = callPosition;
+        g_phase2PatchApplied = false;
+        g_phase2VisibilityBypassActive = false;
+        g_phase2Status = "Sell visibility gate resolved";
+        return true;
+    }
+
     if (!WriteVmPatch(program, callPosition, patch))
     {
         g_phase2Status = "VM patch write failed";
@@ -2195,6 +2206,9 @@ static void UpdatePhase2SellExposure()
 
         g_phase2ObservedProgram = program;
         g_phase2AttemptedProgram = nullptr;
+
+        if (program != g_phase3AnalyzedProgram)
+            g_structuralCacheReady = false;
 
         if (program != g_phase3AnalyzedProgram)
         {
@@ -3527,6 +3541,22 @@ static bool ApplyHighValueSellRestrictionPatch(
         kVmNop
     };
 
+    if (g_prepareStructuralCacheOnly)
+    {
+        g_highValueSellPatchedProgram = program;
+        g_highValueSellPatchPosition = messagePush;
+        std::memcpy(
+            g_highValueSellOriginal,
+            original,
+            sizeof(g_highValueSellOriginal));
+        std::memcpy(
+            g_highValueSellPatch,
+            patch,
+            sizeof(g_highValueSellPatch));
+        g_highValueSellPatchApplied = false;
+        return true;
+    }
+
     if (!WriteVmPatch(program, messagePush, patch))
     {
         Logf(
@@ -3862,6 +3892,33 @@ static bool ApplySellPlayerOwnedCallPatches(
         kVmNop,
         kVmNop
     };
+
+    if (g_prepareStructuralCacheOnly)
+    {
+        g_sellOwnershipPatchedProgram = program;
+        g_sellOwnershipPatchPositions = patchPositions;
+        g_sellOwnershipPatchBackups.clear();
+        g_sellOwnershipPatchBackups.reserve(
+            prepared.size());
+
+        for (size_t i = 0;
+             i < prepared.size();
+             ++i)
+        {
+            VmPatchBackup backup{};
+            backup.position =
+                prepared[i].position;
+            std::memcpy(
+                backup.original,
+                prepared[i].original,
+                sizeof(backup.original));
+            g_sellOwnershipPatchBackups.push_back(
+                backup);
+        }
+
+        g_sellOwnershipPatchApplied = false;
+        return true;
+    }
 
     size_t written = 0;
     for (; written < prepared.size(); ++written)
@@ -7588,6 +7645,9 @@ static bool InstallPhase3SellDisplayPriceHook(
     g_phase3SellDisplayPriceHook.installed =
         false;
 
+    if (g_prepareStructuralCacheOnly)
+        return true;
+
     if (!WritePhase3NativeHandlerSlot(
             program,
             nativeIndex,
@@ -7762,6 +7822,9 @@ static bool InstallPhase3SellCooldownHook(
         original;
     g_phase3SellCooldownHook.installed =
         false;
+
+    if (g_prepareStructuralCacheOnly)
+        return true;
 
     if (!WritePhase3NativeHandlerSlot(
             program,
@@ -9073,10 +9136,12 @@ static bool InstallPhase3SellGateProbes(
 
 static void UpdatePhase3Diagnostics()
 {
-    if (!g_stockLscScopeActive
+    if ((!g_stockLscScopeActive
+            && !g_prepareStructuralCacheOnly)
         || !g_phase3Enabled
         || g_lastNetworkGame
-        || !g_phase2PatchApplied
+        || (!g_phase2PatchApplied
+            && !g_prepareStructuralCacheOnly)
         || g_phase2NetworkGameNativeIndex == 0xFFFF)
     {
         return;
@@ -9213,6 +9278,18 @@ static void UpdatePhase3Diagnostics()
         sellPriceDisplayHookInstalled ? "yes" : "no",
         sellCooldownPathResolved ? "resolved" : "unresolved",
         sellCooldownHookInstalled ? "yes" : "no");
+
+    g_structuralCacheReady =
+        sellEligibilityResolved
+        && highValueSellBypassApplied
+        && playerOwnedHelperResolved
+        && playerOwnedBypassApplied
+        && g_phase3SellPricePath.resolved
+        && sellPriceDisplayHookInstalled
+        && sellCooldownPathResolved
+        && sellCooldownHookInstalled
+        && g_phase3SellStagePath.resolved
+        && g_phase3SellControlPath.resolved;
 }
 
 static void ArmPhase3RuntimeTrace(
