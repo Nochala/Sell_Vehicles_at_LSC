@@ -5,6 +5,9 @@ namespace SellCompletion
     using LogCallback = void (*)(const char* message);
 
     void Initialize(LogCallback logger);
+    void ConfigureCooldown(
+        bool enabled,
+        int minutes);
     void Update(
         bool shopActive,
         bool sellContextActive,
