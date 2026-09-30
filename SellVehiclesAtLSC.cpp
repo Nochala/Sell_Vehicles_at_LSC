@@ -13,13 +13,11 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.18 configurable native Sell cooldown";
+static const char* kBuildTag = "v0.3.19 native Sell cooldown gate hook";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
 static int g_sellCooldownMinutes = 48;
-static bool g_nativeSellCooldownTemporarilyCleared = false;
-static int g_nativeSellCooldownOriginalStat = 0;
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -600,6 +598,30 @@ struct Phase3SellDisplayPriceHook
 };
 
 static Phase3SellDisplayPriceHook g_phase3SellDisplayPriceHook{};
+
+struct Phase3SellCooldownPath
+{
+    bool resolved;
+    uint32_t messagePush;
+    uint32_t clockNativeSite;
+    uint16_t clockNativeIndex;
+};
+
+struct Phase3SellCooldownHook
+{
+    Phase2ScrProgram* program;
+    uint32_t nativeSite;
+    uint16_t nativeIndex;
+    Phase3NativeHandler original;
+    bool installed;
+};
+
+static Phase3SellCooldownPath g_phase3SellCooldownPath{};
+static Phase3SellCooldownHook g_phase3SellCooldownHook{};
+static bool g_phase3CooldownGateEventPending = false;
+static int g_phase3CooldownGateClockValue = 0;
+static int g_phase3CooldownGateRemainingSeconds = 0;
+static int g_phase3CooldownLastLoggedRemainingSeconds = -1;
 static Vehicle g_phase3PreparedVehicle = 0;
 static Hash g_phase3PreparedModel = 0;
 static int g_phase3PreparedMenuState = -999;
@@ -1776,6 +1798,14 @@ static void UpdatePhase2SellExposure()
             g_phase3SellPricePath = Phase3SellPricePath{};
             g_phase3SellDisplayPriceHook =
                 Phase3SellDisplayPriceHook{};
+            g_phase3SellCooldownPath =
+                Phase3SellCooldownPath{};
+            g_phase3SellCooldownHook =
+                Phase3SellCooldownHook{};
+            g_phase3CooldownGateEventPending = false;
+            g_phase3CooldownGateClockValue = 0;
+            g_phase3CooldownGateRemainingSeconds = 0;
+            g_phase3CooldownLastLoggedRemainingSeconds = -1;
             ResetPhase3PreparedSellPrice();
             g_phase3DisplayPriceEventPending = false;
             g_phase3SellControlPath = Phase3SellControlPath{};
@@ -2454,6 +2484,245 @@ static bool ResolvePhase3SellHandler(
             reference.stringPosition,
             reference.stringOffset);
     }
+
+    return true;
+}
+
+static bool ResolvePhase3SellCooldownPath(
+    Phase2ScrProgram* program,
+    const VmFunctionRange& sellHandler)
+{
+    g_phase3SellCooldownPath =
+        Phase3SellCooldownPath{};
+
+    if (!program
+        || sellHandler.end <= sellHandler.start)
+    {
+        return false;
+    }
+
+    std::vector<uint32_t> noSell3Offsets;
+    FindExactScriptStringOffsets(
+        program,
+        "CMOD_NOSELL3",
+        noSell3Offsets);
+
+    if (noSell3Offsets.empty())
+    {
+        Logf(
+            "[Gameplay] SellCooldownPath=no reason=CMOD_NOSELL3 string not found");
+        return false;
+    }
+
+    Phase3SellAnchor anchor{};
+    anchor.label = "CMOD_NOSELL3";
+    anchor.offsets = noSell3Offsets;
+
+    std::vector<Phase3SellAnchor> anchors;
+    anchors.push_back(anchor);
+
+    std::vector<Phase3StringReference> references;
+    int distinct = 0;
+    if (!CollectSellStringReferences(
+            program,
+            sellHandler,
+            anchors,
+            references,
+            distinct)
+        || references.empty())
+    {
+        Logf(
+            "[Gameplay] SellCooldownPath=no reason=CMOD_NOSELL3 reference not found in Sell handler");
+        return false;
+    }
+
+    int matches = 0;
+    uint32_t matchedMessagePush = 0;
+    uint32_t matchedNativeSite = 0;
+    uint16_t matchedNativeIndex = 0xFFFF;
+
+    for (size_t r = 0; r < references.size(); ++r)
+    {
+        const uint32_t messagePush =
+            references[r].pushPosition;
+
+        const uint32_t searchStart =
+            messagePush > sellHandler.start + 0x100U
+                ? messagePush - 0x100U
+                : sellHandler.start;
+
+        for (uint32_t position = searchStart;
+             position < messagePush;)
+        {
+            uint32_t length = 0;
+            unsigned char* op =
+                ScriptCodePointer(
+                    program,
+                    position);
+
+            if (!op
+                || !GetVmInstructionLength(
+                    program,
+                    position,
+                    length))
+            {
+                return false;
+            }
+
+            if (*op == kVmNative)
+            {
+                uint8_t packed = 0;
+                uint16_t nativeIndex = 0;
+
+                if (!ReadVmNativeSignature(
+                        program,
+                        position,
+                        packed,
+                        nativeIndex))
+                {
+                    return false;
+                }
+
+                if ((packed >> 2) == 0
+                    && (packed & 0x03) == 1)
+                {
+                    uint32_t p =
+                        position + length;
+
+                    uint32_t nextLength = 0;
+                    unsigned char* pushStat =
+                        ScriptCodePointer(
+                            program,
+                            p);
+
+                    if (pushStat
+                        && *pushStat
+                            == kVmPushConstU32
+                        && GetVmInstructionLength(
+                            program,
+                            p,
+                            nextLength))
+                    {
+                        p += nextLength;
+
+                        unsigned char* getterCall =
+                            ScriptCodePointer(
+                                program,
+                                p);
+
+                        if (getterCall
+                            && *getterCall
+                                == kVmCall
+                            && GetVmInstructionLength(
+                                program,
+                                p,
+                                nextLength))
+                        {
+                            p += nextLength;
+
+                            unsigned char* subtract =
+                                ScriptCodePointer(
+                                    program,
+                                    p);
+
+                            if (subtract
+                                && *subtract == 0x02
+                                && GetVmInstructionLength(
+                                    program,
+                                    p,
+                                    nextLength))
+                            {
+                                p += nextLength;
+
+                                int thresholdBase = 0;
+                                if (TryGetVmPushedInt(
+                                        program,
+                                        p,
+                                        thresholdBase)
+                                    && thresholdBase
+                                        == 2880)
+                                {
+                                    bool hasLessThan =
+                                        false;
+                                    uint32_t verify =
+                                        p;
+
+                                    while (verify
+                                        < messagePush
+                                        && verify
+                                            < p + 0x30U)
+                                    {
+                                        uint32_t verifyLength = 0;
+                                        unsigned char* verifyOp =
+                                            ScriptCodePointer(
+                                                program,
+                                                verify);
+
+                                        if (!verifyOp
+                                            || !GetVmInstructionLength(
+                                                program,
+                                                verify,
+                                                verifyLength))
+                                        {
+                                            return false;
+                                        }
+
+                                        if (*verifyOp == 0x0C)
+                                        {
+                                            hasLessThan = true;
+                                            break;
+                                        }
+
+                                        verify +=
+                                            verifyLength;
+                                    }
+
+                                    if (hasLessThan)
+                                    {
+                                        ++matches;
+                                        matchedMessagePush =
+                                            messagePush;
+                                        matchedNativeSite =
+                                            position;
+                                        matchedNativeIndex =
+                                            nativeIndex;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            position += length;
+        }
+    }
+
+    if (matches != 1
+        || matchedNativeSite == 0
+        || matchedNativeIndex == 0xFFFF)
+    {
+        Logf(
+            "[Gameplay] SellCooldownPath=no reason=clock gate not unique matches=%d",
+            matches);
+        return false;
+    }
+
+    g_phase3SellCooldownPath.resolved =
+        true;
+    g_phase3SellCooldownPath.messagePush =
+        matchedMessagePush;
+    g_phase3SellCooldownPath.clockNativeSite =
+        matchedNativeSite;
+    g_phase3SellCooldownPath.clockNativeIndex =
+        matchedNativeIndex;
+
+    Logf(
+        "[Gameplay] SellCooldownPath=yes message=CMOD_NOSELL3 push=0x%X clockSite=0x%X nativeIndex=%u thresholdBase=2880",
+        matchedMessagePush,
+        matchedNativeSite,
+        static_cast<unsigned int>(
+            matchedNativeIndex));
 
     return true;
 }
@@ -6809,6 +7078,212 @@ static bool InstallPhase3SellDisplayPriceHook(
     return true;
 }
 
+static void Phase3SellCooldownClockHook(
+    Phase3NativeCallContext* context)
+{
+    Phase3NativeHandler original =
+        g_phase3SellCooldownHook.original;
+
+    if (!original
+        || original
+            == &Phase3SellCooldownClockHook)
+    {
+        return;
+    }
+
+    original(context);
+
+    if (!g_carmodShopActive
+        || g_lastNetworkGame
+        || !g_phase3SellCooldownHook.installed
+        || !g_phase3SellCooldownPath.resolved
+        || !g_phase3PriceThreadCached
+        || !g_phase3PriceThreadInfo.thread
+        || !context
+        || !context->returnValue
+        || !IsReadableMemory(
+            context->returnValue,
+            sizeof(uint64_t)))
+    {
+        return;
+    }
+
+    uint32_t programCounter = 0;
+    const size_t pcOffset =
+        IsEnhancedEdition()
+            ? 0x1C
+            : 0x14;
+
+    if (!ReadMemoryValue(
+            g_phase3PriceThreadInfo.thread,
+            pcOffset,
+            programCounter)
+        || !IsPhase3PcAtNativeSite(
+            programCounter,
+            g_phase3SellCooldownHook.nativeSite))
+    {
+        return;
+    }
+
+    int clockValue = 2147483647;
+    int remainingSeconds = 0;
+
+    if (g_useSellCooldown)
+    {
+        int activeClockValue = 0;
+        int activeRemainingSeconds = 0;
+
+        if (SellCompletion::
+                TryGetCooldownClockOverride(
+                    activeClockValue,
+                    activeRemainingSeconds))
+        {
+            clockValue =
+                activeClockValue;
+            remainingSeconds =
+                activeRemainingSeconds;
+        }
+    }
+
+    const uint64_t rawValue =
+        static_cast<uint64_t>(
+            static_cast<uint32_t>(
+                clockValue));
+
+    std::memcpy(
+        context->returnValue,
+        &rawValue,
+        sizeof(rawValue));
+
+    g_phase3CooldownGateClockValue =
+        clockValue;
+    g_phase3CooldownGateRemainingSeconds =
+        remainingSeconds;
+    g_phase3CooldownGateEventPending =
+        true;
+}
+
+static bool InstallPhase3SellCooldownHook(
+    Phase2ScrProgram* program)
+{
+    if (!program
+        || !g_phase3SellCooldownPath.resolved
+        || g_phase3SellCooldownPath.clockNativeIndex
+            == 0xFFFF
+        || g_phase3SellCooldownPath.clockNativeSite
+            == 0
+        || program->nativeCount <= 0
+        || !program->nativeOffset
+        || g_phase3SellCooldownPath.clockNativeIndex
+            >= static_cast<uint16_t>(
+                program->nativeCount))
+    {
+        return false;
+    }
+
+    if (g_phase3SellCooldownHook.installed
+        && g_phase3SellCooldownHook.program
+            == program
+        && g_phase3SellCooldownHook.nativeIndex
+            == g_phase3SellCooldownPath
+                .clockNativeIndex)
+    {
+        return true;
+    }
+
+    Phase3NativeHandler* table =
+        reinterpret_cast<Phase3NativeHandler*>(
+            program->nativeOffset);
+
+    if (!IsReadableMemory(
+            table,
+            sizeof(Phase3NativeHandler)
+                * static_cast<size_t>(
+                    program->nativeCount)))
+    {
+        return false;
+    }
+
+    const uint16_t nativeIndex =
+        g_phase3SellCooldownPath
+            .clockNativeIndex;
+
+    Phase3NativeHandler original =
+        table[nativeIndex];
+
+    if (!original
+        || original
+            == &Phase3SellCooldownClockHook)
+    {
+        return false;
+    }
+
+    g_phase3SellCooldownHook.program =
+        program;
+    g_phase3SellCooldownHook.nativeSite =
+        g_phase3SellCooldownPath
+            .clockNativeSite;
+    g_phase3SellCooldownHook.nativeIndex =
+        nativeIndex;
+    g_phase3SellCooldownHook.original =
+        original;
+    g_phase3SellCooldownHook.installed =
+        false;
+
+    if (!WritePhase3NativeHandlerSlot(
+            program,
+            nativeIndex,
+            &Phase3SellCooldownClockHook))
+    {
+        g_phase3SellCooldownHook =
+            Phase3SellCooldownHook{};
+        return false;
+    }
+
+    g_phase3SellCooldownHook.installed =
+        true;
+
+    Logf(
+        "[Gameplay] SellCooldownHook=yes clockSite=0x%X nativeIndex=%u scope=exact-CMOD_NOSELL3-clock-call",
+        g_phase3SellCooldownHook.nativeSite,
+        static_cast<unsigned int>(
+            nativeIndex));
+
+    return true;
+}
+
+static void FlushPhase3SellCooldownGateEvent()
+{
+    if (!g_phase3CooldownGateEventPending)
+        return;
+
+    g_phase3CooldownGateEventPending =
+        false;
+
+    const int remaining =
+        g_phase3CooldownGateRemainingSeconds;
+
+    const bool shouldLog =
+        g_phase3CooldownLastLoggedRemainingSeconds
+            < 0
+        || remaining == 0
+        || remaining
+            <= g_phase3CooldownLastLoggedRemainingSeconds
+                - 30;
+
+    if (!shouldLog)
+        return;
+
+    g_phase3CooldownLastLoggedRemainingSeconds =
+        remaining;
+
+    Logf(
+        "[Gameplay] SellCooldownGate active=%s remainingSeconds=%d clockOverride=%d",
+        remaining > 0 ? "yes" : "no",
+        remaining,
+        g_phase3CooldownGateClockValue);
+}
+
 static bool IsPhase3PcAtNativeSite(
     uint32_t programCounter,
     uint32_t site)
@@ -7996,6 +8471,10 @@ static void UpdatePhase3Diagnostics()
     ResolvePhase3SellControlPath(
         program,
         sellHandler);
+    const bool sellCooldownPathResolved =
+        ResolvePhase3SellCooldownPath(
+            program,
+            sellHandler);
 
     // Keep the old synchronous diagnostic probes disabled. The one exception
     // is a single low-frequency REGISTER_SCRIPT_VARIABLE hook used only to
@@ -8006,15 +8485,21 @@ static void UpdatePhase3Diagnostics()
     const bool sellPriceDisplayHookInstalled =
         InstallPhase3SellDisplayPriceHook(
             program);
+    const bool sellCooldownHookInstalled =
+        sellCooldownPathResolved
+        && InstallPhase3SellCooldownHook(
+            program);
 
     Logf(
-        "[Phase3] Diagnostics READY nativeProbes=disabled runtimeTrace=disabled sellEligibility=%s highValueSellBypass=%s playerOwnedHelper=%s playerOwnedBypass=%s sellPricePath=%s sellPriceDisplayHook=%s. Phase 3M bypasses the CMOD_NOSELL1 high-value rejection and forces the Player_Vehicle ownership predicate true only at Sell-related CALL sites. The display hook is limited to the exact registered iOptionCost[0] pointer and performs no runtime scan.",
+        "[Phase3] Diagnostics READY nativeProbes=disabled runtimeTrace=disabled sellEligibility=%s highValueSellBypass=%s playerOwnedHelper=%s playerOwnedBypass=%s sellPricePath=%s sellPriceDisplayHook=%s sellCooldownPath=%s sellCooldownHook=%s. Phase 3M bypasses the CMOD_NOSELL1 high-value rejection and forces the Player_Vehicle ownership predicate true only at Sell-related CALL sites. The display-price and cooldown hooks are exact-site filtered and perform no runtime VM/thread scans.",
         sellEligibilityResolved ? "resolved" : "unresolved",
         highValueSellBypassApplied ? "yes" : "no",
         playerOwnedHelperResolved ? "resolved" : "unresolved",
         playerOwnedBypassApplied ? "yes" : "no",
         g_phase3SellPricePath.resolved ? "resolved" : "unresolved",
-        sellPriceDisplayHookInstalled ? "yes" : "no");
+        sellPriceDisplayHookInstalled ? "yes" : "no",
+        sellCooldownPathResolved ? "resolved" : "unresolved",
+        sellCooldownHookInstalled ? "yes" : "no");
 }
 
 static void ArmPhase3RuntimeTrace(
@@ -8475,81 +8960,6 @@ static void UpdateNetworkState()
     }
 }
 
-static Hash GetNativeVehicleSellTimeStat()
-{
-    return GAMEPLAY::GET_HASH_KEY(
-        "MPPLY_VEHICLE_SELL_TIME");
-}
-
-static void ApplySellCooldownSettingForShop()
-{
-    if (g_useSellCooldown
-        || g_lastNetworkGame
-        || g_nativeSellCooldownTemporarilyCleared)
-    {
-        return;
-    }
-
-    int currentSellTime = 0;
-    const Hash sellTimeStat =
-        GetNativeVehicleSellTimeStat();
-
-    if (!STATS::STAT_GET_INT(
-            sellTimeStat,
-            &currentSellTime,
-            -1))
-    {
-        Logf(
-            "[Gameplay] NativeSellCooldown bypass unavailable: MPPLY_VEHICLE_SELL_TIME read failed");
-        return;
-    }
-
-    if (currentSellTime == 0)
-        return;
-
-    if (!STATS::STAT_SET_INT(
-            sellTimeStat,
-            0,
-            false))
-    {
-        Logf(
-            "[Gameplay] NativeSellCooldown bypass unavailable: MPPLY_VEHICLE_SELL_TIME temporary clear failed");
-        return;
-    }
-
-    g_nativeSellCooldownOriginalStat =
-        currentSellTime;
-    g_nativeSellCooldownTemporarilyCleared =
-        true;
-
-    Logf(
-        "[Gameplay] NativeSellCooldown temporarily bypassed originalSellTime=%d",
-        currentSellTime);
-}
-
-static void RestoreNativeSellCooldownAfterShop()
-{
-    if (!g_nativeSellCooldownTemporarilyCleared)
-        return;
-
-    const Hash sellTimeStat =
-        GetNativeVehicleSellTimeStat();
-
-    const BOOL restored =
-        STATS::STAT_SET_INT(
-            sellTimeStat,
-            g_nativeSellCooldownOriginalStat,
-            false);
-
-    Logf(
-        "[Gameplay] NativeSellCooldown restore=%s sellTime=%d",
-        restored ? "yes" : "no",
-        g_nativeSellCooldownOriginalStat);
-
-    g_nativeSellCooldownTemporarilyCleared = false;
-    g_nativeSellCooldownOriginalStat = 0;
-}
-
 static void BeginCarmodShopSession()
 {
     ++g_shopSessionId;
@@ -8576,8 +8986,6 @@ static void BeginCarmodShopSession()
     g_nextPhase3PriceUpdateAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
-    ApplySellCooldownSettingForShop();
-
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
         static_cast<unsigned int>(g_shopSessionId),
@@ -8603,7 +9011,6 @@ static void EndCarmodShopSession()
         GAMEPLAY::GET_GAME_TIMER());
 
     LogVehicleSnapshot("carmod_shop stopped", true);
-    RestoreNativeSellCooldownAfterShop();
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
@@ -8817,7 +9224,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
-    Logf("[Info] Gameplay cooldown uses Rockstar's MPPLY_VEHICLE_SELL_TIME + CMOD_NOSELL3 path. SellCooldownMinutes=48 maps to the stock 2880-second interval; custom minute values shift only the timestamp while leaving Rockstar's native gate intact.");
+    Logf("[Info] Gameplay cooldown preserves Rockstar's native CMOD_NOSELL3 Sell gate. Story Mode rejects writes to MPPLY_VEHICLE_SELL_TIME, so an exact-site clock hook supplies the elapsed value only to Rockstar's original cooldown comparison. SellCooldownMinutes controls that elapsed window without patching the rejection message or unrelated eligibility checks.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
@@ -8901,6 +9308,7 @@ void ScriptMain()
         }
 
         UpdateSellCompletionController();
+        FlushPhase3SellCooldownGateEvent();
 
         PollPeriodicSnapshot(now);
     }
