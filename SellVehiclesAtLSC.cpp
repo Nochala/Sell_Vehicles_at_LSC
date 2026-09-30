@@ -650,6 +650,9 @@ static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
 static constexpr ULONGLONG kPhase3PriceUpdateIntervalMs = 50ULL;
 
 static void ResetPhase3PreparedSellPrice();
+static bool IsPhase3PcAtNativeSite(
+    uint32_t programCounter,
+    uint32_t site);
 
 static bool IsEnhancedEdition()
 {
