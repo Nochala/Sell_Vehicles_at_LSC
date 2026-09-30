@@ -2066,6 +2066,13 @@ static void UpdatePhase2SellExposure()
             program,
             g_phase2Status.c_str());
     }
+    else
+    {
+        // Apply the character-vehicle policy as soon as the structural Sell
+        // call is resolved, before carmod_shop has a chance to build its root
+        // menu. BeginCarmodShopSession repeats this check as a cheap safeguard.
+        ApplyCharacterVehicleSettingForShop();
+    }
 }
 
 static bool ValidateProgramStrings(Phase2ScrProgram* program)
