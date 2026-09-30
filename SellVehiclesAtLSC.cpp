@@ -13,7 +13,13 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.17 Phase 3O post-sale cash HUD";
+static const char* kBuildTag = "v0.3.18 configurable native Sell cooldown";
+
+static bool g_enabled = true;
+static bool g_useSellCooldown = false;
+static int g_sellCooldownMinutes = 48;
+static bool g_nativeSellCooldownTemporarilyCleared = false;
+static int g_nativeSellCooldownOriginalStat = 0;
 
 static bool g_logEnabled = true;
 static bool g_showStartupNotification = true;
@@ -103,6 +109,40 @@ static int ReadIniInt(
         key,
         defaultValue,
         g_iniPath);
+}
+
+static bool ReadIniBool(
+    const char* section,
+    const char* key,
+    bool defaultValue)
+{
+    char value[32]{};
+
+    GetPrivateProfileStringA(
+        section,
+        key,
+        defaultValue ? "true" : "false",
+        value,
+        static_cast<DWORD>(sizeof(value)),
+        g_iniPath);
+
+    if (_stricmp(value, "true") == 0
+        || _stricmp(value, "yes") == 0
+        || _stricmp(value, "on") == 0
+        || std::strcmp(value, "1") == 0)
+    {
+        return true;
+    }
+
+    if (_stricmp(value, "false") == 0
+        || _stricmp(value, "no") == 0
+        || _stricmp(value, "off") == 0
+        || std::strcmp(value, "0") == 0)
+    {
+        return false;
+    }
+
+    return defaultValue;
 }
 
 static void ResetLogFile()
@@ -8435,6 +8475,81 @@ static void UpdateNetworkState()
     }
 }
 
+static Hash GetNativeVehicleSellTimeStat()
+{
+    return GAMEPLAY::GET_HASH_KEY(
+        "MPPLY_VEHICLE_SELL_TIME");
+}
+
+static void ApplySellCooldownSettingForShop()
+{
+    if (g_useSellCooldown
+        || g_lastNetworkGame
+        || g_nativeSellCooldownTemporarilyCleared)
+    {
+        return;
+    }
+
+    int currentSellTime = 0;
+    const Hash sellTimeStat =
+        GetNativeVehicleSellTimeStat();
+
+    if (!STATS::STAT_GET_INT(
+            sellTimeStat,
+            &currentSellTime,
+            -1))
+    {
+        Logf(
+            "[Gameplay] NativeSellCooldown bypass unavailable: MPPLY_VEHICLE_SELL_TIME read failed");
+        return;
+    }
+
+    if (currentSellTime == 0)
+        return;
+
+    if (!STATS::STAT_SET_INT(
+            sellTimeStat,
+            0,
+            false))
+    {
+        Logf(
+            "[Gameplay] NativeSellCooldown bypass unavailable: MPPLY_VEHICLE_SELL_TIME temporary clear failed");
+        return;
+    }
+
+    g_nativeSellCooldownOriginalStat =
+        currentSellTime;
+    g_nativeSellCooldownTemporarilyCleared =
+        true;
+
+    Logf(
+        "[Gameplay] NativeSellCooldown temporarily bypassed originalSellTime=%d",
+        currentSellTime);
+}
+
+static void RestoreNativeSellCooldownAfterShop()
+{
+    if (!g_nativeSellCooldownTemporarilyCleared)
+        return;
+
+    const Hash sellTimeStat =
+        GetNativeVehicleSellTimeStat();
+
+    const BOOL restored =
+        STATS::STAT_SET_INT(
+            sellTimeStat,
+            g_nativeSellCooldownOriginalStat,
+            false);
+
+    Logf(
+        "[Gameplay] NativeSellCooldown restore=%s sellTime=%d",
+        restored ? "yes" : "no",
+        g_nativeSellCooldownOriginalStat);
+
+    g_nativeSellCooldownTemporarilyCleared = false;
+    g_nativeSellCooldownOriginalStat = 0;
+}
+
 static void BeginCarmodShopSession()
 {
     ++g_shopSessionId;
@@ -8461,6 +8576,8 @@ static void BeginCarmodShopSession()
     g_nextPhase3PriceUpdateAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
+    ApplySellCooldownSettingForShop();
+
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
         static_cast<unsigned int>(g_shopSessionId),
@@ -8486,6 +8603,7 @@ static void EndCarmodShopSession()
         GAMEPLAY::GET_GAME_TIMER());
 
     LogVehicleSnapshot("carmod_shop stopped", true);
+    RestoreNativeSellCooldownAfterShop();
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
@@ -8598,6 +8716,27 @@ static void PollPeriodicSnapshot(ULONGLONG now)
 
 static void LoadSettings()
 {
+    g_enabled =
+        ReadIniBool(
+            "Settings",
+            "Enabled",
+            true);
+
+    g_useSellCooldown =
+        ReadIniBool(
+            "Settings",
+            "UseSellCooldown",
+            false);
+
+    g_sellCooldownMinutes =
+        ReadIniInt(
+            "Settings",
+            "SellCooldownMinutes",
+            48);
+
+    if (g_sellCooldownMinutes < 1)
+        g_sellCooldownMinutes = 1;
+
     g_logEnabled =
         ReadIniInt("Diagnostics", "EnableLog", 1) != 0;
 
@@ -8661,7 +8800,10 @@ static void LogStartupState()
     Logf("[Info] Edition=%s", GetEditionName());
     Logf("[Info] getGameVersion()=%d", getGameVersion());
     Logf(
-        "[Info] Settings log=%s startupNotification=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        "[Info] Settings enabled=%s useSellCooldown=%s sellCooldownMinutes=%d log=%s startupNotification=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        g_enabled ? "yes" : "no",
+        g_useSellCooldown ? "yes" : "no",
+        g_sellCooldownMinutes,
         g_logEnabled ? "on" : "off",
         g_showStartupNotification ? "on" : "off",
         g_logControls ? "on" : "off",
@@ -8675,6 +8817,7 @@ static void LogStartupState()
     Logf("[Info] Phase 3O adds a separate SellCompletion controller. While the resolved native Sell price field is active, it follows Rockstar's two-step Sell confirmation, then fades out, removes the sold vehicle, moves the player to the nearest stock LSC exterior, and fades back in.");
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
+    Logf("[Info] Gameplay cooldown uses Rockstar's MPPLY_VEHICLE_SELL_TIME + CMOD_NOSELL3 path. SellCooldownMinutes=48 maps to the stock 2880-second interval; custom minute values shift only the timestamp while leaving Rockstar's native gate intact.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
@@ -8686,8 +8829,18 @@ void ScriptMain()
     if (g_logEnabled)
         ResetLogFile();
 
+    if (!g_enabled)
+    {
+        Logf("[Info] Enabled=false; SellVehiclesAtLSC is disabled.");
+        FlushLogBuffer();
+        return;
+    }
+
     SellCompletion::Initialize(
         &LogSellCompletionMessage);
+    SellCompletion::ConfigureCooldown(
+        g_useSellCooldown,
+        g_sellCooldownMinutes);
 
     LogStartupState();
     InitializeScriptProbes();
@@ -8697,7 +8850,7 @@ void ScriptMain()
     if (g_showStartupNotification)
     {
         Notify(
-            "~b~~h~SellVehiclesAtLSC~h~~w~ Phase 3O post-sale transition enabled.");
+            "~b~~h~SellVehiclesAtLSC~h~~w~ enabled.");
     }
 
     // PERFORMANCE RULE:
