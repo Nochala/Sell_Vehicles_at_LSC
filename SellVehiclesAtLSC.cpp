@@ -6931,7 +6931,8 @@ static void FlushPhase3DisplayPriceEvent()
 
 static void UpdatePhase3SellPriceFallback()
 {
-    if (!g_phase3Enabled
+    if (!g_stockLscScopeActive
+        || !g_phase3Enabled
         || !g_phase3SellPricePath.resolved
         || !g_carmodShopActive
         || g_lastNetworkGame)
@@ -7314,7 +7315,8 @@ static void UpdatePhase3SellControlStateFast()
 static void UpdateSellCompletionController()
 {
     SellCompletion::Update(
-        g_carmodShopActive,
+        g_stockLscScopeActive
+            && g_carmodShopActive,
         g_phase3SellContextActive,
         g_phase3SellContextPrice,
         g_phase3SellControlState);
@@ -7935,6 +7937,7 @@ static void RestoreStockLscPatches(
     // Force fresh structural validation next time the player approaches an
     // actual Los Santos Customs. No patched state is carried to other garages.
     g_phase2AttemptedProgram = nullptr;
+    g_phase2NetworkGameNativeIndex = 0xFFFF;
     g_phase3AnalyzedProgram = nullptr;
     g_phase3FunctionCatalog.clear();
     g_phase3SellHandler = VmFunctionRange{};
@@ -7955,6 +7958,16 @@ static void RestoreStockLscPatches(
     g_phase3PriceThreadInfo =
         Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
+    g_phase3CooldownGateEventPending = false;
+    g_phase3CooldownGateClockValue = 0;
+    g_phase3CooldownGateRemainingSeconds = 0;
+    g_phase3CooldownLastLoggedRemainingSeconds = -1;
+    g_phase3DisplayPriceEventPending = false;
+    g_phase3SellContextActive = false;
+    g_phase3SellContextPrice = 0;
+    g_phase3SellControlState = -1;
+    g_phase3CurrentMenuState = -1;
+    g_phase3SellStageActive = false;
     ResetPhase3PreparedSellPrice();
 }
 
@@ -9035,7 +9048,8 @@ static bool InstallPhase3SellGateProbes(
 
 static void UpdatePhase3Diagnostics()
 {
-    if (!g_phase3Enabled
+    if (!g_stockLscScopeActive
+        || !g_phase3Enabled
         || g_lastNetworkGame
         || !g_phase2PatchApplied
         || g_phase2NetworkGameNativeIndex == 0xFFFF)
@@ -9966,8 +9980,8 @@ void ScriptMain()
 
     if (!g_enabled)
     {
-        Logf("[Info] Enabled=false; SellVehiclesAtLSC is disabled.");
-        FlushLogBuffer();
+        WriteStatusLogLine(
+            "SellVehiclesAtLSC Disabled");
         return;
     }
 
