@@ -278,8 +278,6 @@ namespace
             return;
         }
 
-        // Keep GTA's native Story Mode cash balance visible alongside the
-        // normal cash-change notification after a completed vehicle sale.
         UI::SHOW_HUD_COMPONENT_THIS_FRAME(
             kHudComponentCash);
     }
@@ -652,15 +650,6 @@ namespace SellCompletion
                 (remainingMs + 999ULL)
                 / 1000ULL);
 
-        // Rockstar's original Story Mode-visible Sell path compares:
-        //   GET_CLOUD_TIME_AS_INT() - MPPLY_VEHICLE_SELL_TIME
-        //       < 2880 / iMaxNumberStolenVehiclesSoldDaily
-        //
-        // MPPLY_VEHICLE_SELL_TIME cannot be written through STAT_SET_INT in
-        // Story Mode. At the exact resolved clock-native callsite, return a
-        // synthetic elapsed value that remains below Rockstar's stock 2880
-        // second threshold for the requested duration. The rest of Rockstar's
-        // condition and CMOD_NOSELL3 handling remain untouched.
         const int syntheticElapsed =
             kNativeSellCooldownSeconds
             - remainingSeconds;
@@ -713,8 +702,6 @@ namespace SellCompletion
         if (sellPrice > 0)
             g_lastSellPrice = sellPrice;
 
-        // No input counting or timing heuristics are used here. Completion is
-        // driven only by Rockstar's structurally resolved DO_STAGE_SELL state.
         if (sellControlState < 0)
         {
             ClearSellContext();
