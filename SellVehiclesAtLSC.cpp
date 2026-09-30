@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.21 gameplay safeguards and damage pricing";
+static const char* kBuildTag = "v0.3.22 LSC-only clean logging";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -36,6 +36,7 @@ static char g_logBuffer[kLogBufferCapacity]{};
 static size_t g_logBufferUsed = 0;
 static uint32_t g_logDroppedLines = 0;
 static ULONGLONG g_nextLogFlushAt = 0;
+static bool g_debugLogActive = false;
 
 static bool g_phase2Enabled = true;
 static bool g_phase3Enabled = true;
@@ -62,12 +63,6 @@ struct ScriptProbe
 static ScriptProbe g_scriptProbes[] =
 {
     { "carmod_shop", 0, false, false, 0, false },
-    { "personal_carmod_shop", 0, false, false, 0, false },
-    { "car_meet_carmod", 0, false, false, 0, false },
-    { "business_hub_carmod", 0, false, false, 0, false },
-    { "arena_carmod", 0, false, false, 0, false },
-    { "armory_aircraft_carmod", 0, false, false, 0, false },
-    { "am_car_mod_tut", 0, false, false, 0, false },
 };
 
 static constexpr size_t kScriptProbeCount =
@@ -85,6 +80,25 @@ static SHORT g_lastF10State = 0;
 static bool g_rootMarkerSet = false;
 static int g_inferredMenuDepth = -1;
 static uint32_t g_inputSequence = 0;
+static bool g_stockLscScopeActive = false;
+
+struct StockLscPoint
+{
+    float x;
+    float y;
+    float z;
+    const char* name;
+};
+
+static const StockLscPoint kStockLscPoints[] =
+{
+    { -362.7962f, -132.4005f, 38.25239f, "Burton" },
+    { -1140.191f, -1985.478f, 12.72923f, "LSIA" },
+    { 716.4645f, -1088.869f, 21.92979f, "La Mesa" },
+    { 1174.811f, 2649.954f, 37.37151f, "Harmony" }
+};
+
+static constexpr float kStockLscPatchRadius = 140.0f;
 
 struct VehicleSnapshot
 {
@@ -151,6 +165,7 @@ static void ResetLogFile()
 {
     g_logBufferUsed = 0;
     g_logDroppedLines = 0;
+    g_debugLogActive = false;
     g_nextLogFlushAt =
         GetTickCount64() + kLogFlushIntervalMs;
 
@@ -162,9 +177,99 @@ static void ResetLogFile()
         fclose(file);
 }
 
+static void WriteStatusLogLine(
+    const char* message)
+{
+    if (!g_logEnabled || !message)
+        return;
+
+    FILE* file =
+        _fsopen(g_logPath, "a", _SH_DENYNO);
+
+    if (!file)
+        return;
+
+    SYSTEMTIME localTime{};
+    GetLocalTime(&localTime);
+
+    std::fprintf(
+        file,
+        "[%02u:%02u:%02u.%03u] %s\n",
+        static_cast<unsigned int>(localTime.wHour),
+        static_cast<unsigned int>(localTime.wMinute),
+        static_cast<unsigned int>(localTime.wSecond),
+        static_cast<unsigned int>(localTime.wMilliseconds),
+        message);
+
+    std::fclose(file);
+}
+
+static bool ContainsInsensitive(
+    const char* text,
+    const char* needle)
+{
+    if (!text || !needle || !*needle)
+        return false;
+
+    const size_t needleLength =
+        std::strlen(needle);
+
+    for (const char* p = text; *p; ++p)
+    {
+        if (_strnicmp(
+                p,
+                needle,
+                needleLength) == 0)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool IsFailureDiagnostic(
+    const char* message)
+{
+    if (!message)
+        return false;
+
+    static const char* const failureMarkers[] =
+    {
+        "failed",
+        "failure",
+        "error=",
+        "error:",
+        "=no reason=",
+        "unresolved",
+        "could not",
+        "not armed",
+        "unsupported executable",
+        "invalid code",
+        "invalid program",
+        "write/verify"
+    };
+
+    for (size_t i = 0;
+         i < sizeof(failureMarkers)
+             / sizeof(failureMarkers[0]);
+         ++i)
+    {
+        if (ContainsInsensitive(
+                message,
+                failureMarkers[i]))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void FlushLogBuffer()
 {
     if (!g_logEnabled
+        || !g_debugLogActive
         || (g_logBufferUsed == 0
             && g_logDroppedLines == 0))
     {
@@ -190,7 +295,7 @@ static void FlushLogBuffer()
     {
         std::fprintf(
             file,
-            "[logger] dropped %u buffered log lines\n",
+            "[logger] dropped %u buffered debug log lines\n",
             static_cast<unsigned int>(
                 g_logDroppedLines));
     }
@@ -206,6 +311,18 @@ static void Logf(const char* format, ...)
     if (!g_logEnabled || !format)
         return;
 
+    char message[1792]{};
+
+    va_list args;
+    va_start(args, format);
+    vsnprintf_s(
+        message,
+        sizeof(message),
+        _TRUNCATE,
+        format,
+        args);
+    va_end(args);
+
     char line[2048]{};
 
     SYSTEMTIME localTime{};
@@ -215,32 +332,14 @@ static void Logf(const char* format, ...)
         line,
         sizeof(line),
         _TRUNCATE,
-        "[%02u:%02u:%02u.%03u] ",
+        "[%02u:%02u:%02u.%03u] [Debug] %s",
         static_cast<unsigned int>(localTime.wHour),
         static_cast<unsigned int>(localTime.wMinute),
         static_cast<unsigned int>(localTime.wSecond),
-        static_cast<unsigned int>(localTime.wMilliseconds));
+        static_cast<unsigned int>(localTime.wMilliseconds),
+        message);
 
     size_t lineLength =
-        strnlen_s(line, sizeof(line));
-
-    if (lineLength >= sizeof(line) - 1)
-    {
-        ++g_logDroppedLines;
-        return;
-    }
-
-    va_list args;
-    va_start(args, format);
-    vsnprintf_s(
-        line + lineLength,
-        sizeof(line) - lineLength,
-        _TRUNCATE,
-        format,
-        args);
-    va_end(args);
-
-    lineLength =
         strnlen_s(line, sizeof(line));
 
     if (lineLength < sizeof(line) - 1)
@@ -250,9 +349,24 @@ static void Logf(const char* format, ...)
     }
 
     if (lineLength == 0
-        || lineLength > kLogBufferCapacity
-        || g_logBufferUsed
+        || lineLength > kLogBufferCapacity)
+    {
+        ++g_logDroppedLines;
+        return;
+    }
+
+    // Before a failure, keep diagnostics in memory only. If the history fills,
+    // discard the older successful trace and retain the newest context.
+    if (!g_debugLogActive
+        && g_logBufferUsed
             > kLogBufferCapacity - lineLength)
+    {
+        g_logBufferUsed = 0;
+        ++g_logDroppedLines;
+    }
+
+    if (g_logBufferUsed
+        > kLogBufferCapacity - lineLength)
     {
         ++g_logDroppedLines;
         return;
@@ -264,6 +378,15 @@ static void Logf(const char* format, ...)
         lineLength);
 
     g_logBufferUsed += lineLength;
+
+    if (!g_debugLogActive
+        && IsFailureDiagnostic(message))
+    {
+        g_debugLogActive = true;
+        WriteStatusLogLine(
+            "SellVehiclesAtLSC failure detected - debug logging enabled");
+        FlushLogBuffer();
+    }
 }
 
 static void LogSellCompletionMessage(const char* message)
@@ -308,6 +431,71 @@ static uint32_t Joaat(const char* text)
     hash += (hash << 15);
     return hash;
 }
+
+static bool IsPlayerNearStockLsc()
+{
+    const Ped ped =
+        PLAYER::PLAYER_PED_ID();
+
+    if (ped == 0
+        || !ENTITY::DOES_ENTITY_EXIST(ped))
+    {
+        return false;
+    }
+
+    Entity entity =
+        static_cast<Entity>(ped);
+
+    if (PED::IS_PED_IN_ANY_VEHICLE(
+            ped,
+            false))
+    {
+        const Vehicle vehicle =
+            PED::GET_VEHICLE_PED_IS_IN(
+                ped,
+                false);
+
+        if (vehicle != 0
+            && ENTITY::DOES_ENTITY_EXIST(
+                vehicle))
+        {
+            entity =
+                static_cast<Entity>(
+                    vehicle);
+        }
+    }
+
+    const Vector3 position =
+        ENTITY::GET_ENTITY_COORDS(
+            entity,
+            true);
+
+    const float radiusSquared =
+        kStockLscPatchRadius
+        * kStockLscPatchRadius;
+
+    for (size_t i = 0;
+         i < sizeof(kStockLscPoints)
+             / sizeof(kStockLscPoints[0]);
+         ++i)
+    {
+        const float dx =
+            position.x - kStockLscPoints[i].x;
+        const float dy =
+            position.y - kStockLscPoints[i].y;
+
+        if (dx * dx + dy * dy
+            <= radiusSquared)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void RestoreStockLscPatches(
+    const char* reason);
 
 static const char* GetExecutableName()
 {
@@ -548,15 +736,23 @@ static void* g_phase3HelperTraceThread = nullptr;
 static ULONGLONG g_phase3HelperTraceUntil = 0;
 static uint32_t g_phase3HelperTraceSequence = 0;
 
+struct VmPatchBackup
+{
+    uint32_t position;
+    unsigned char original[4];
+};
+
 static Phase2ScrProgram* g_highValueSellPatchedProgram = nullptr;
 static uint32_t g_highValueSellPatchPosition = 0;
 static bool g_highValueSellPatchApplied = false;
+static unsigned char g_highValueSellOriginal[4]{};
 
 static VmFunctionRange g_phase3SellEligibilityFunction{};
 static uint32_t g_phase3NoSell1MessagePush = 0;
 
 static Phase2ScrProgram* g_sellOwnershipPatchedProgram = nullptr;
 static std::vector<uint32_t> g_sellOwnershipPatchPositions;
+static std::vector<VmPatchBackup> g_sellOwnershipPatchBackups;
 static bool g_sellOwnershipPatchApplied = false;
 static VmFunctionRange g_phase3PlayerOwnedHelper{};
 
@@ -1954,6 +2150,16 @@ static void RestoreCharacterVehicleSettingAfterShop()
 
 static void UpdatePhase2SellExposure()
 {
+    g_stockLscScopeActive =
+        IsPlayerNearStockLsc();
+
+    if (!g_stockLscScopeActive)
+    {
+        RestoreStockLscPatches(
+            "outside stock Los Santos Customs");
+        return;
+    }
+
     if (!g_phase2Enabled
         || g_lastNetworkGame
         || !InitializePhase2Internals())
@@ -2023,12 +2229,17 @@ static void UpdatePhase2SellExposure()
                 g_highValueSellPatchedProgram = nullptr;
                 g_highValueSellPatchPosition = 0;
                 g_highValueSellPatchApplied = false;
+                std::memset(
+                    g_highValueSellOriginal,
+                    0,
+                    sizeof(g_highValueSellOriginal));
             }
 
             if (program != g_sellOwnershipPatchedProgram)
             {
                 g_sellOwnershipPatchedProgram = nullptr;
                 g_sellOwnershipPatchPositions.clear();
+                g_sellOwnershipPatchBackups.clear();
                 g_sellOwnershipPatchApplied = false;
             }
         }
@@ -3315,6 +3526,10 @@ static bool ApplyHighValueSellRestrictionPatch(
 
     g_highValueSellPatchedProgram = program;
     g_highValueSellPatchPosition = messagePush;
+    std::memcpy(
+        g_highValueSellOriginal,
+        original,
+        sizeof(g_highValueSellOriginal));
     g_highValueSellPatchApplied = true;
 
     Logf(
@@ -3664,6 +3879,25 @@ static bool ApplySellPlayerOwnedCallPatches(
 
     g_sellOwnershipPatchedProgram = program;
     g_sellOwnershipPatchPositions = patchPositions;
+    g_sellOwnershipPatchBackups.clear();
+    g_sellOwnershipPatchBackups.reserve(
+        prepared.size());
+
+    for (size_t i = 0;
+         i < prepared.size();
+         ++i)
+    {
+        VmPatchBackup backup{};
+        backup.position =
+            prepared[i].position;
+        std::memcpy(
+            backup.original,
+            prepared[i].original,
+            sizeof(backup.original));
+        g_sellOwnershipPatchBackups.push_back(
+            backup);
+    }
+
     g_sellOwnershipPatchApplied = true;
 
     Logf(
@@ -6930,7 +7164,8 @@ static void UpdatePhase3SellControlStateFast()
 {
     g_phase3SellStageActive = false;
 
-    if (!g_phase3Enabled
+    if (!g_stockLscScopeActive
+        || !g_phase3Enabled
         || !g_carmodShopActive
         || g_lastNetworkGame
         || !g_phase3SellStagePath.resolved
@@ -7201,7 +7436,8 @@ static void Phase3SellDisplayPriceRegisterHook(
     // SECURITY::REGISTER_SCRIPT_VARIABLE receives INT*. Only modify the call
     // whose pointer is exactly the structurally resolved iOptionCost[0] stack
     // slot. Every other registration is a pure pass-through.
-    if (g_carmodShopActive
+    if (g_stockLscScopeActive
+        && g_carmodShopActive
         && !g_lastNetworkGame
         && g_phase3PreparedSellPriceValid
         && g_phase3PreparedSellPrice > 0
@@ -7372,7 +7608,8 @@ static void Phase3SellCooldownClockHook(
 
     original(context);
 
-    if (!g_carmodShopActive
+    if (!g_stockLscScopeActive
+        || !g_carmodShopActive
         || g_lastNetworkGame
         || !g_phase3SellCooldownHook.installed
         || !g_phase3SellCooldownPath.resolved
@@ -7561,6 +7798,164 @@ static void FlushPhase3SellCooldownGateEvent()
         remaining > 0 ? "yes" : "no",
         remaining,
         g_phase3CooldownGateClockValue);
+}
+
+static void RestoreStockLscPatches(
+    const char* reason)
+{
+    bool restoreFailed = false;
+
+    if (g_phase3SellCooldownHook.installed
+        && g_phase3SellCooldownHook.program
+        && g_phase3SellCooldownHook.original)
+    {
+        if (!WritePhase3NativeHandlerSlot(
+                g_phase3SellCooldownHook.program,
+                g_phase3SellCooldownHook.nativeIndex,
+                g_phase3SellCooldownHook.original))
+        {
+            restoreFailed = true;
+            Logf(
+                "[Scope] failed restoring Sell cooldown native hook reason=%s",
+                reason ? reason : "unspecified");
+        }
+        else
+        {
+            g_phase3SellCooldownHook =
+                Phase3SellCooldownHook{};
+        }
+    }
+
+    if (g_phase3SellDisplayPriceHook.installed
+        && g_phase3SellDisplayPriceHook.program
+        && g_phase3SellDisplayPriceHook.original)
+    {
+        if (!WritePhase3NativeHandlerSlot(
+                g_phase3SellDisplayPriceHook.program,
+                g_phase3SellDisplayPriceHook.nativeIndex,
+                g_phase3SellDisplayPriceHook.original))
+        {
+            restoreFailed = true;
+            Logf(
+                "[Scope] failed restoring Sell display-price native hook reason=%s",
+                reason ? reason : "unspecified");
+        }
+        else
+        {
+            g_phase3SellDisplayPriceHook =
+                Phase3SellDisplayPriceHook{};
+        }
+    }
+
+    if (g_sellOwnershipPatchApplied
+        && g_sellOwnershipPatchedProgram)
+    {
+        bool ownershipRestored = true;
+
+        for (size_t i = 0;
+             i < g_sellOwnershipPatchBackups.size();
+             ++i)
+        {
+            if (!WriteVmPatch(
+                    g_sellOwnershipPatchedProgram,
+                    g_sellOwnershipPatchBackups[i].position,
+                    g_sellOwnershipPatchBackups[i].original))
+            {
+                ownershipRestored = false;
+                break;
+            }
+        }
+
+        if (!ownershipRestored)
+        {
+            restoreFailed = true;
+            Logf(
+                "[Scope] failed restoring Player_Vehicle Sell call patches reason=%s",
+                reason ? reason : "unspecified");
+        }
+        else
+        {
+            g_sellOwnershipPatchApplied = false;
+            g_sellOwnershipPatchedProgram = nullptr;
+            g_sellOwnershipPatchPositions.clear();
+            g_sellOwnershipPatchBackups.clear();
+        }
+    }
+
+    if (g_highValueSellPatchApplied
+        && g_highValueSellPatchedProgram)
+    {
+        if (!WriteVmPatch(
+                g_highValueSellPatchedProgram,
+                g_highValueSellPatchPosition,
+                g_highValueSellOriginal))
+        {
+            restoreFailed = true;
+            Logf(
+                "[Scope] failed restoring high-value Sell patch reason=%s",
+                reason ? reason : "unspecified");
+        }
+        else
+        {
+            g_highValueSellPatchApplied = false;
+            g_highValueSellPatchedProgram = nullptr;
+            g_highValueSellPatchPosition = 0;
+            std::memset(
+                g_highValueSellOriginal,
+                0,
+                sizeof(g_highValueSellOriginal));
+        }
+    }
+
+    if (g_phase2PatchApplied
+        && g_phase2PatchedProgram)
+    {
+        if (!WriteVmPatch(
+                g_phase2PatchedProgram,
+                g_phase2PatchPosition,
+                g_phase2OriginalCall))
+        {
+            restoreFailed = true;
+            Logf(
+                "[Scope] failed restoring Sell visibility patch reason=%s",
+                reason ? reason : "unspecified");
+        }
+        else
+        {
+            g_phase2PatchApplied = false;
+            g_phase2VisibilityBypassActive = false;
+            g_phase2PatchedProgram = nullptr;
+            g_phase2PatchPosition = 0;
+        }
+    }
+
+    if (restoreFailed)
+        return;
+
+    // Force fresh structural validation next time the player approaches an
+    // actual Los Santos Customs. No patched state is carried to other garages.
+    g_phase2AttemptedProgram = nullptr;
+    g_phase3AnalyzedProgram = nullptr;
+    g_phase3FunctionCatalog.clear();
+    g_phase3SellHandler = VmFunctionRange{};
+    g_phase3SellHandlerResolved = false;
+    g_phase3SellEligibilityFunction =
+        VmFunctionRange{};
+    g_phase3NoSell1MessagePush = 0;
+    g_phase3PlayerOwnedHelper =
+        VmFunctionRange{};
+    g_phase3SellPricePath =
+        Phase3SellPricePath{};
+    g_phase3SellCooldownPath =
+        Phase3SellCooldownPath{};
+    g_phase3SellControlPath =
+        Phase3SellControlPath{};
+    g_phase3SellStagePath =
+        Phase3SellStagePath{};
+    g_phase3PriceThreadInfo =
+        Phase2ThreadInfo{};
+    g_phase3PriceThreadCached = false;
+    ResetPhase3PreparedSellPrice();
 }
 
 static bool IsPhase3PcAtNativeSite(
@@ -9557,6 +9952,7 @@ static void LogStartupState()
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
     Logf("[Info] Gameplay cooldown preserves Rockstar's native CMOD_NOSELL3 Sell gate. Story Mode rejects writes to MPPLY_VEHICLE_SELL_TIME, so an exact-site clock hook supplies the elapsed value only to Rockstar's original cooldown comparison. SellCooldownMinutes controls that elapsed window without patching the rejection message or unrelated eligibility checks.");
     Logf("[Info] UseDamagePenalty=%s scales the configured resale price by the worse of body/engine condition. AllowCharacterVehicles=%s uses Rockstar's SP protagonist model+plate definitions to suppress the injected Sell category for those character vehicles.", g_useDamagePenalty ? "on" : "off", g_allowCharacterVehicles ? "yes" : "no");
+    Logf("[Info] Scope: VM patches and native hooks are enabled only within 140m of the four stock Los Santos Customs locations (Burton, LSIA, La Mesa, Harmony). They are restored outside that scope; Beeker's and other customization garages are not patched.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
@@ -9584,7 +9980,19 @@ void ScriptMain()
     LogStartupState();
     InitializeScriptProbes();
     UpdateNetworkState();
-    InitializePhase2Internals();
+    const bool phase2Ready =
+        InitializePhase2Internals();
+
+    if (phase2Ready)
+    {
+        WriteStatusLogLine(
+            "SellVehiclesAtLSC Initialized");
+    }
+    else
+    {
+        Logf(
+            "[Init] SellVehiclesAtLSC initialization failed: Phase 2 internals unavailable");
+    }
 
     if (g_showStartupNotification)
     {
