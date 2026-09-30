@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.26 startup structural initialization";
+static const char* kBuildTag = "v0.3.27 enhanced ownership disambiguation";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -3560,9 +3560,16 @@ static bool ApplyHighValueSellRestrictionPatch(
     return true;
 }
 
+static bool CollectCallsToVmFunction(
+    Phase2ScrProgram* program,
+    const VmFunctionRange& caller,
+    uint32_t targetStart,
+    std::vector<uint32_t>& calls);
+
 static bool ResolvePhase3PlayerOwnedHelper(
     Phase2ScrProgram* program,
     const std::vector<VmFunctionRange>& functions,
+    const VmFunctionRange& sellHandler,
     VmFunctionRange& playerOwnedHelper)
 {
     playerOwnedHelper = VmFunctionRange{};
@@ -3588,6 +3595,9 @@ static bool ResolvePhase3PlayerOwnedHelper(
     anchors.push_back(anchor);
 
     int qualifiedCandidates = 0;
+    int sellLinkedCandidates = 0;
+    VmFunctionRange soleQualifiedCandidate{};
+    VmFunctionRange soleSellLinkedCandidate{};
 
     for (size_t i = 0; i < functions.size(); ++i)
     {
@@ -3620,24 +3630,66 @@ static bool ResolvePhase3PlayerOwnedHelper(
         if (networkRefs <= 0)
             continue;
 
+        std::vector<uint32_t> sellHandlerCalls;
+        if (!CollectCallsToVmFunction(
+                program,
+                sellHandler,
+                functions[i].start,
+                sellHandlerCalls))
+        {
+            return false;
+        }
+
         ++qualifiedCandidates;
-        playerOwnedHelper = functions[i];
+        soleQualifiedCandidate = functions[i];
+
+        if (!sellHandlerCalls.empty())
+        {
+            ++sellLinkedCandidates;
+            soleSellLinkedCandidate = functions[i];
+        }
 
         Logf(
-            "[Phase3M] PlayerOwnedHelperCandidate func=%d start=0x%X end=0x%X args=%u playerVehicleRefs=%u networkGameRefs=%d",
+            "[Phase3M] PlayerOwnedHelperCandidate func=%d start=0x%X end=0x%X args=%u playerVehicleRefs=%u networkGameRefs=%d directSellCalls=%u",
             functions[i].index,
             functions[i].start,
             functions[i].end,
             static_cast<unsigned int>(functions[i].argCount),
             static_cast<unsigned int>(references.size()),
-            networkRefs);
+            networkRefs,
+            static_cast<unsigned int>(sellHandlerCalls.size()));
     }
 
-    if (qualifiedCandidates != 1 || !playerOwnedHelper.found)
+    if (qualifiedCandidates == 1
+        && soleQualifiedCandidate.found)
+    {
+        playerOwnedHelper =
+            soleQualifiedCandidate;
+    }
+    else if (qualifiedCandidates > 1
+        && sellLinkedCandidates == 1
+        && soleSellLinkedCandidate.found)
+    {
+        // Enhanced currently contains another one-argument helper that also
+        // references Player_Vehicle and NETWORK_IS_GAME_IN_PROGRESS. The real
+        // Sell ownership helper is the only candidate called directly by the
+        // structurally resolved Sell handler. Legacy also satisfies this
+        // relationship, so this remains structural rather than build-specific.
+        playerOwnedHelper =
+            soleSellLinkedCandidate;
+
+        Logf(
+            "[Phase3M] PlayerOwnedHelper disambiguated by direct Sell-handler call candidates=%d sellLinked=%d selectedFunc=%d",
+            qualifiedCandidates,
+            sellLinkedCandidates,
+            playerOwnedHelper.index);
+    }
+    else
     {
         Logf(
-            "[Phase3M] PlayerOwnedHelper=no reason=structural target not unique candidates=%d",
-            qualifiedCandidates);
+            "[Phase3M] PlayerOwnedHelper=no reason=structural target not unique candidates=%d sellLinked=%d",
+            qualifiedCandidates,
+            sellLinkedCandidates);
         playerOwnedHelper = VmFunctionRange{};
         return false;
     }
@@ -9311,6 +9363,7 @@ static void UpdatePhase3Diagnostics()
         ResolvePhase3PlayerOwnedHelper(
             program,
             functions,
+            sellHandler,
             playerOwnedHelper);
 
     if (playerOwnedHelperResolved)
