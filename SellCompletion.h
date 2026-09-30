@@ -8,6 +8,9 @@ namespace SellCompletion
     void ConfigureCooldown(
         bool enabled,
         int minutes);
+    bool TryGetCooldownClockOverride(
+        int& clockValue,
+        int& remainingSeconds);
     void Update(
         bool shopActive,
         bool sellContextActive,
