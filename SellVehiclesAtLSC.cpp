@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.23 cached LSC patching";
+static const char* kBuildTag = "v0.3.24 staggered cached reactivation";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -1890,8 +1890,10 @@ static bool WriteVmPatch(
     }
 
     std::memcpy(address, patch, 4);
-    FlushInstructionCache(GetCurrentProcess(), address, 4);
 
+    // ScriptVM bytecode is interpreted as data rather than executed directly
+    // by the CPU. Flushing the process instruction cache for every 4-byte VM
+    // edit only adds synchronization overhead during LSC scope transitions.
     DWORD ignored = 0;
     VirtualProtect(address, 4, oldProtection, &ignored);
 
@@ -7978,6 +7980,13 @@ static bool ReactivateCachedStockLscPatches(
     g_phase2PatchApplied = true;
     g_phase2VisibilityBypassActive = true;
 
+    // Cached reactivation is event-driven, but several VirtualProtect calls
+    // back-to-back can still produce a visible one-frame spike. We have ample
+    // distance before the garage at scope activation, so distribute the
+    // already-resolved writes across frames while carmod_shop is still idle.
+    if (!g_carmodShopActive)
+        WAIT(0);
+
     if (!WriteVmPatch(
             program,
             g_highValueSellPatchPosition,
@@ -7989,6 +7998,9 @@ static bool ReactivateCachedStockLscPatches(
     }
 
     g_highValueSellPatchApplied = true;
+
+    if (!g_carmodShopActive)
+        WAIT(0);
 
     const unsigned char ownershipPatch[4] =
     {
@@ -8012,6 +8024,9 @@ static bool ReactivateCachedStockLscPatches(
         {
             break;
         }
+
+        if (!g_carmodShopActive)
+            WAIT(0);
     }
 
     if (ownershipWritten
@@ -8047,6 +8062,9 @@ static bool ReactivateCachedStockLscPatches(
     g_phase3SellDisplayPriceHook.installed =
         true;
 
+    if (!g_carmodShopActive)
+        WAIT(0);
+
     if (!WritePhase3NativeHandlerSlot(
             program,
             g_phase3SellCooldownHook.nativeIndex,
@@ -8063,7 +8081,7 @@ static bool ReactivateCachedStockLscPatches(
     ApplyCharacterVehicleSettingForShop();
 
     Logf(
-        "[Performance] cached LSC patch set reactivated without structural scan");
+        "[Performance] cached LSC patch set reactivated incrementally without structural scan");
 
     return true;
 }
