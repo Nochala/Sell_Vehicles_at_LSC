@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.24 staggered cached reactivation";
+static const char* kBuildTag = "v0.3.25 debug logging option";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -24,6 +24,7 @@ static bool g_useDamagePenalty = true;
 static bool g_allowCharacterVehicles = false;
 
 static bool g_logEnabled = true;
+static bool g_debugLoggingEnabled = false;
 static bool g_showStartupNotification = false;
 static bool g_logControls = false;
 static bool g_logVehicleSnapshots = false;
@@ -173,7 +174,8 @@ static void ResetLogFile()
 {
     g_logBufferUsed = 0;
     g_logDroppedLines = 0;
-    g_debugLogActive = false;
+    g_debugLogActive =
+        g_logEnabled && g_debugLoggingEnabled;
     g_nextLogFlushAt =
         GetTickCount64() + kLogFlushIntervalMs;
 
@@ -10244,6 +10246,12 @@ static void LoadSettings()
             "Logging",
             legacyLogEnabled);
 
+    g_debugLoggingEnabled =
+        ReadIniBool(
+            "Settings",
+            "DebugLogging",
+            false);
+
     g_logControls =
         ReadIniInt("Diagnostics", "LogControls", 0) != 0;
 
@@ -10298,9 +10306,10 @@ static void LogStartupState()
     Logf("[Info] Edition=%s", GetEditionName());
     Logf("[Info] getGameVersion()=%d", getGameVersion());
     Logf(
-        "[Info] Settings enabled=%s logging=%s notification=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d useDamagePenalty=%s allowCharacterVehicles=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        "[Info] Settings enabled=%s logging=%s debugLogging=%s notification=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d useDamagePenalty=%s allowCharacterVehicles=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
         g_enabled ? "yes" : "no",
         g_logEnabled ? "on" : "off",
+        g_debugLoggingEnabled ? "on" : "off",
         g_showStartupNotification ? "on" : "off",
         g_useSellCooldown ? "yes" : "no",
         g_sellCooldownMinutes,
