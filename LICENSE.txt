@@ -1,8 +1,8 @@
 # SELL VEHICLES AT LOS SANTOS CUSTOMS
 
-### &sect; LICENSE &amp; USAGE
+### § LICENSE & USAGE
 
-Copyright &copy; 2026 **Nochala**
+Copyright © 2026 **Nochala**
 
 This license applies to the project and software distributed under any of the following names:
 
@@ -15,9 +15,9 @@ These names refer to the same project unless otherwise stated.
 
 All rights reserved except where expressly granted under the **GNU General Public License, Version 3 or later**.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
-### &sect; OPEN SOURCE LICENSE
+### § OPEN SOURCE LICENSE
 
 **Sell Vehicles at Los Santos Customs**, including releases distributed under the names **SellVehiclesAtLSC** or **Sell Vehicles at LSC**, is free software.
 
@@ -28,9 +28,9 @@ You may use, copy, redistribute, and modify this software under the terms of the
 
 Any redistribution or modified version of this project must remain compliant with the applicable terms of the GNU General Public License.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
-### &sect; SOURCE &amp; MODIFICATIONS
+### § SOURCE & MODIFICATIONS
 
 You are permitted to study and modify the source code for personal use or redistribution in accordance with the GPL.
 
@@ -38,9 +38,9 @@ If you distribute a modified version of this project, the corresponding source c
 
 Modified versions should be clearly identified as modified and should not be represented as an official release of **Sell Vehicles at Los Santos Customs**, **SellVehiclesAtLSC**, or any other official project name used by **Nochala**.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
-### &sect; NO WARRANTY
+### § NO WARRANTY
 
 This software is provided **AS IS**, without warranty of any kind.
 
@@ -50,9 +50,9 @@ You use this software entirely at your own risk.
 
 Neither **Nochala** nor any contributor to this project shall be held responsible for game crashes, corrupted files, lost progress, incompatibilities, or any other damages resulting from the use or modification of this software.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
-### &sect; THIRD-PARTY SOFTWARE
+### § THIRD-PARTY SOFTWARE
 
 **Grand Theft Auto V**, **Los Santos Customs**, and related names, trademarks, game assets, and intellectual property belong to their respective owners.
 
@@ -60,9 +60,9 @@ This project is an independently developed modification and is not affiliated wi
 
 Third-party libraries, tools, or software used alongside this project remain subject to their respective licenses.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
-### &sect; GNU GENERAL PUBLIC LICENSE
+### § GNU GENERAL PUBLIC LICENSE
 
 The complete GNU General Public License, Version 3 is available at:
 
@@ -70,9 +70,9 @@ https://www.gnu.org/licenses/gpl-3.0.html
 
 A copy of the full license should be distributed with this project.
 
-&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;
+——————————
 
 **Sell Vehicles at Los Santos Customs**  
 **SellVehiclesAtLSC**  
-Copyright &copy; 2026 Nochala  
+Copyright © 2026 Nochala  
 Licensed under the **GNU GPL v3 or later**
