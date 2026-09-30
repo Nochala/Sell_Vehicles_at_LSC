@@ -1897,8 +1897,7 @@ static bool SetPhase2SellVisibilityBypass(
 
 static void ApplyCharacterVehicleSettingForShop()
 {
-    if (g_allowCharacterVehicles
-        || !g_phase2PatchApplied
+    if (!g_phase2PatchApplied
         || g_lastNetworkGame)
     {
         return;
@@ -1911,6 +1910,12 @@ static void ApplyCharacterVehicleSettingForShop()
             playerPed,
             false))
     {
+        // Fail open for ordinary LSC behavior if no current vehicle can be
+        // identified. This also repairs a stale hidden state from a previous
+        // session if restoring the patch had failed for any reason.
+        SetPhase2SellVisibilityBypass(
+            true,
+            "no current shop vehicle");
         return;
     }
 
@@ -1919,12 +1924,20 @@ static void ApplyCharacterVehicleSettingForShop()
             playerPed,
             false);
 
-    if (IsRockstarCharacterVehicle(vehicle))
-    {
-        SetPhase2SellVisibilityBypass(
-            false,
-            "AllowCharacterVehicles=false");
-    }
+    const bool characterVehicle =
+        IsRockstarCharacterVehicle(vehicle);
+
+    const bool exposeSell =
+        g_allowCharacterVehicles
+        || !characterVehicle;
+
+    SetPhase2SellVisibilityBypass(
+        exposeSell,
+        characterVehicle
+            ? (g_allowCharacterVehicles
+                ? "character vehicle allowed"
+                : "AllowCharacterVehicles=false")
+            : "non-character vehicle");
 }
 
 static void RestoreCharacterVehicleSettingAfterShop()
