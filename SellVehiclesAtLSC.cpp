@@ -13,16 +13,18 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.20 configurable pricing and logging";
+static const char* kBuildTag = "v0.3.21 gameplay safeguards and damage pricing";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
 static int g_sellCooldownMinutes = 48;
 static int g_vehicleSellPercent = 60;
 static int g_upgradePercent = 8;
+static bool g_useDamagePenalty = true;
+static bool g_allowCharacterVehicles = false;
 
 static bool g_logEnabled = true;
-static bool g_showStartupNotification = true;
+static bool g_showStartupNotification = false;
 static bool g_logControls = false;
 static bool g_logVehicleSnapshots = false;
 static int g_scriptPollIntervalMs = 250;
@@ -459,6 +461,9 @@ static Phase2ScrProgram* g_phase2AttemptedProgram = nullptr;
 static Phase2ScrProgram* g_phase2PatchedProgram = nullptr;
 static uint32_t g_phase2PatchPosition = 0;
 static bool g_phase2PatchApplied = false;
+static bool g_phase2VisibilityBypassActive = false;
+static unsigned char g_phase2OriginalCall[4]{};
+static unsigned char g_phase2VisibilityPatch[4]{};
 static std::string g_phase2Status = "not attempted";
 static uint16_t g_phase2NetworkGameNativeIndex = 0xFFFF;
 
@@ -1712,6 +1717,11 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         call[0], call[1], call[2], call[3]
     };
 
+    std::memcpy(
+        g_phase2OriginalCall,
+        original,
+        sizeof(g_phase2OriginalCall));
+
     // The structurally resolved Sell filter takes one vehicle argument and
     // returns one bool. Replacing only this call with DROP + false keeps the
     // VM stack balanced while bypassing the Story Mode hide decision for
@@ -1720,6 +1730,11 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
     {
         kVmDrop, kVmPushConst0, kVmNop, kVmNop
     };
+
+    std::memcpy(
+        g_phase2VisibilityPatch,
+        patch,
+        sizeof(g_phase2VisibilityPatch));
 
     if (!WriteVmPatch(program, callPosition, patch))
     {
@@ -1731,6 +1746,7 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
     g_phase2PatchedProgram = program;
     g_phase2PatchPosition = callPosition;
     g_phase2PatchApplied = true;
+    g_phase2VisibilityBypassActive = true;
     g_phase2Status = "Sell visibility gate bypassed";
 
     Phase2ThreadInfo threadInfo{};
@@ -1759,6 +1775,168 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
         "[Phase2] Scope: one carmod_shop ScriptVM CALL only. No NETWORK native spoof, script-local write, vehicle write, or money write.");
 
     return true;
+}
+
+static bool PlateTextEquals(
+    Vehicle vehicle,
+    const char* expected)
+{
+    if (vehicle == 0
+        || !expected)
+    {
+        return false;
+    }
+
+    const char* plate =
+        VEHICLE::GET_VEHICLE_NUMBER_PLATE_TEXT(
+            vehicle);
+
+    if (!plate)
+        return false;
+
+    char normalized[16]{};
+    strncpy_s(
+        normalized,
+        sizeof(normalized),
+        plate,
+        _TRUNCATE);
+
+    size_t length =
+        strnlen_s(
+            normalized,
+            sizeof(normalized));
+
+    while (length > 0
+        && normalized[length - 1] == ' ')
+    {
+        normalized[--length] = '\0';
+    }
+
+    return _stricmp(
+        normalized,
+        expected) == 0;
+}
+
+static bool IsRockstarCharacterVehicle(
+    Vehicle vehicle)
+{
+    if (vehicle == 0
+        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
+    {
+        return false;
+    }
+
+    const Hash model =
+        ENTITY::GET_ENTITY_MODEL(vehicle);
+
+    // Rockstar's SP player vehicle data identifies the protagonist vehicles
+    // with model + fixed plate combinations. Using both avoids blocking an
+    // ordinary traffic vehicle merely because it shares the same model.
+    if (model == Joaat("tailgater"))
+        return PlateTextEquals(vehicle, "5MDS003");
+
+    if (model == Joaat("premier"))
+        return PlateTextEquals(vehicle, "880HS955");
+
+    if (model == Joaat("bodhi2"))
+        return PlateTextEquals(vehicle, "BETTY 32");
+
+    if (model == Joaat("buffalo2"))
+        return PlateTextEquals(vehicle, "FC1988");
+
+    if (model == Joaat("bagger"))
+        return PlateTextEquals(vehicle, "FC88");
+
+    return false;
+}
+
+static bool SetPhase2SellVisibilityBypass(
+    bool enabled,
+    const char* reason)
+{
+    if (!g_phase2PatchApplied
+        || !g_phase2PatchedProgram
+        || g_phase2PatchPosition == 0)
+    {
+        return false;
+    }
+
+    if (g_phase2VisibilityBypassActive
+        == enabled)
+    {
+        return true;
+    }
+
+    const unsigned char* bytes =
+        enabled
+            ? g_phase2VisibilityPatch
+            : g_phase2OriginalCall;
+
+    if (!WriteVmPatch(
+            g_phase2PatchedProgram,
+            g_phase2PatchPosition,
+            bytes))
+    {
+        Logf(
+            "[Gameplay] CharacterVehicle Sell visibility toggle failed enabled=%s reason=%s",
+            enabled ? "yes" : "no",
+            reason ? reason : "unspecified");
+        return false;
+    }
+
+    g_phase2VisibilityBypassActive =
+        enabled;
+
+    Logf(
+        "[Gameplay] CharacterVehicle Sell visibility exposed=%s reason=%s",
+        enabled ? "yes" : "no",
+        reason ? reason : "unspecified");
+
+    return true;
+}
+
+static void ApplyCharacterVehicleSettingForShop()
+{
+    if (g_allowCharacterVehicles
+        || !g_phase2PatchApplied
+        || g_lastNetworkGame)
+    {
+        return;
+    }
+
+    const Ped playerPed =
+        PLAYER::PLAYER_PED_ID();
+
+    if (!PED::IS_PED_IN_ANY_VEHICLE(
+            playerPed,
+            false))
+    {
+        return;
+    }
+
+    const Vehicle vehicle =
+        PED::GET_VEHICLE_PED_IS_IN(
+            playerPed,
+            false);
+
+    if (IsRockstarCharacterVehicle(vehicle))
+    {
+        SetPhase2SellVisibilityBypass(
+            false,
+            "AllowCharacterVehicles=false");
+    }
+}
+
+static void RestoreCharacterVehicleSettingAfterShop()
+{
+    if (!g_allowCharacterVehicles
+        && g_phase2PatchApplied
+        && !g_phase2VisibilityBypassActive)
+    {
+        SetPhase2SellVisibilityBypass(
+            true,
+            "shop ended");
+    }
 }
 
 static void UpdatePhase2SellExposure()
@@ -1847,6 +2025,15 @@ static void UpdatePhase2SellExposure()
             g_phase2PatchedProgram = nullptr;
             g_phase2PatchPosition = 0;
             g_phase2PatchApplied = false;
+            g_phase2VisibilityBypassActive = false;
+            std::memset(
+                g_phase2OriginalCall,
+                0,
+                sizeof(g_phase2OriginalCall));
+            std::memset(
+                g_phase2VisibilityPatch,
+                0,
+                sizeof(g_phase2VisibilityPatch));
         }
     }
 
@@ -5994,6 +6181,10 @@ struct Phase3VehiclePriceEstimate
     int installedModCount;
     int performanceModCount;
     int toggleModCount;
+    float bodyHealth;
+    float engineHealth;
+    int damagePercent;
+    int damagePenaltyAmount;
     int dynamicSellPrice;
 };
 
@@ -6317,6 +6508,66 @@ static bool EstimatePhase3VehicleSellPrice(
                 g_upgradePercent)
             / 100LL;
 
+    estimate.bodyHealth =
+        VEHICLE::GET_VEHICLE_BODY_HEALTH(
+            vehicle);
+    estimate.engineHealth =
+        VEHICLE::GET_VEHICLE_ENGINE_HEALTH(
+            vehicle);
+    estimate.damagePercent = 0;
+    estimate.damagePenaltyAmount = 0;
+
+    if (g_useDamagePenalty)
+    {
+        float bodyHealth =
+            estimate.bodyHealth;
+        float engineHealth =
+            estimate.engineHealth;
+
+        if (bodyHealth < 0.0f)
+            bodyHealth = 0.0f;
+        else if (bodyHealth > 1000.0f)
+            bodyHealth = 1000.0f;
+
+        if (engineHealth < 0.0f)
+            engineHealth = 0.0f;
+        else if (engineHealth > 1000.0f)
+            engineHealth = 1000.0f;
+
+        // Use the worse of body/engine condition. A vehicle that is 20%
+        // damaged therefore loses 20% of its calculated resale value.
+        const float conditionHealth =
+            bodyHealth < engineHealth
+                ? bodyHealth
+                : engineHealth;
+
+        int conditionPermille =
+            static_cast<int>(
+                conditionHealth + 0.5f);
+
+        if (conditionPermille < 0)
+            conditionPermille = 0;
+        else if (conditionPermille > 1000)
+            conditionPermille = 1000;
+
+        const int64_t beforeDamage =
+            sellPrice;
+
+        sellPrice =
+            sellPrice
+            * static_cast<int64_t>(
+                conditionPermille)
+            / 1000LL;
+
+        estimate.damagePenaltyAmount =
+            static_cast<int>(
+                beforeDamage - sellPrice);
+
+        estimate.damagePercent =
+            (1000 - conditionPermille + 5)
+            / 10;
+    }
+
     if (sellPrice <= 0)
         return false;
 
@@ -6579,7 +6830,7 @@ static void UpdatePhase3SellPriceFallback()
             finalPrice;
 
         Logf(
-            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d gtacarsPurchase=%d classFloor=%d baseMarket=%d vehicleSellPercent=%d customizationRetail=%d upgradePercent=%d installedMods=%d performanceMods=%d toggleMods=%d dynamicSell=%d final=%d source=%s",
+            "[Phase3N] SellPriceDynamic=yes vehicle=%d model=0x%08X class=%d(%s) rockstarPrice=%d modelValue=%d gtacarsPurchase=%d classFloor=%d baseMarket=%d vehicleSellPercent=%d customizationRetail=%d upgradePercent=%d installedMods=%d performanceMods=%d toggleMods=%d damagePenalty=%s bodyHealth=%.1f engineHealth=%.1f damagePercent=%d damagePenaltyAmount=%d dynamicSell=%d final=%d source=%s",
             static_cast<int>(vehicle),
             static_cast<unsigned int>(model),
             estimate.vehicleClass,
@@ -6596,6 +6847,11 @@ static void UpdatePhase3SellPriceFallback()
             estimate.installedModCount,
             estimate.performanceModCount,
             estimate.toggleModCount,
+            g_useDamagePenalty ? "on" : "off",
+            estimate.bodyHealth,
+            estimate.engineHealth,
+            estimate.damagePercent,
+            estimate.damagePenaltyAmount,
             estimate.dynamicSellPrice,
             finalPrice,
             estimate.gtacarsPurchasePrice > 0
@@ -8989,6 +9245,8 @@ static void BeginCarmodShopSession()
     g_nextPhase3PriceUpdateAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
+    ApplyCharacterVehicleSettingForShop();
+
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
         static_cast<unsigned int>(g_shopSessionId),
@@ -9014,6 +9272,7 @@ static void EndCarmodShopSession()
         GAMEPLAY::GET_GAME_TIMER());
 
     LogVehicleSnapshot("carmod_shop stopped", true);
+    RestoreCharacterVehicleSettingAfterShop();
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
@@ -9159,6 +9418,24 @@ static void LoadSettings()
             "UpgradePercent",
             8);
 
+    g_useDamagePenalty =
+        ReadIniBool(
+            "Settings",
+            "UseDamagePenalty",
+            true);
+
+    g_allowCharacterVehicles =
+        ReadIniBool(
+            "Settings",
+            "AllowCharacterVehicles",
+            false);
+
+    g_showStartupNotification =
+        ReadIniBool(
+            "Settings",
+            "Notification",
+            false);
+
     // Keep percentages flexible for modders while preventing accidental
     // negative values or extreme overflow-prone settings.
     if (g_vehicleSellPercent < 0)
@@ -9182,12 +9459,6 @@ static void LoadSettings()
             "Settings",
             "Logging",
             legacyLogEnabled);
-
-    g_showStartupNotification =
-        ReadIniInt(
-            "Diagnostics",
-            "ShowStartupNotification",
-            1) != 0;
 
     g_logControls =
         ReadIniInt("Diagnostics", "LogControls", 0) != 0;
@@ -9243,14 +9514,16 @@ static void LogStartupState()
     Logf("[Info] Edition=%s", GetEditionName());
     Logf("[Info] getGameVersion()=%d", getGameVersion());
     Logf(
-        "[Info] Settings enabled=%s logging=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d startupNotification=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
+        "[Info] Settings enabled=%s logging=%s notification=%s useSellCooldown=%s sellCooldownMinutes=%d vehicleSellPercent=%d upgradePercent=%d useDamagePenalty=%s allowCharacterVehicles=%s controls=%s vehicleSnapshots=%s scriptPollMs=%d snapshotMs=%d phase2=%s phase3=%s",
         g_enabled ? "yes" : "no",
         g_logEnabled ? "on" : "off",
+        g_showStartupNotification ? "on" : "off",
         g_useSellCooldown ? "yes" : "no",
         g_sellCooldownMinutes,
         g_vehicleSellPercent,
         g_upgradePercent,
-        g_showStartupNotification ? "on" : "off",
+        g_useDamagePenalty ? "yes" : "no",
+        g_allowCharacterVehicles ? "yes" : "no",
         g_logControls ? "on" : "off",
         g_logVehicleSnapshots ? "on" : "off",
         g_scriptPollIntervalMs,
@@ -9263,6 +9536,7 @@ static void LogStartupState()
     Logf("[Info] v0.3.5 performance: carmod_shop program discovery is rate-limited, completed Phase 3 analysis takes a zero-scan fast path, Sell-price runtime state caches the resolved script thread and samples the price slot at 20 Hz instead of scanning the full script-thread array every frame, and network/script diagnostics use the timed poll instead of the per-frame Sell path.");
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
     Logf("[Info] Gameplay cooldown preserves Rockstar's native CMOD_NOSELL3 Sell gate. Story Mode rejects writes to MPPLY_VEHICLE_SELL_TIME, so an exact-site clock hook supplies the elapsed value only to Rockstar's original cooldown comparison. SellCooldownMinutes controls that elapsed window without patching the rejection message or unrelated eligibility checks.");
+    Logf("[Info] UseDamagePenalty=%s scales the configured resale price by the worse of body/engine condition. AllowCharacterVehicles=%s uses Rockstar's SP protagonist model+plate definitions to suppress the injected Sell category for those character vehicles.", g_useDamagePenalty ? "on" : "off", g_allowCharacterVehicles ? "yes" : "no");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
