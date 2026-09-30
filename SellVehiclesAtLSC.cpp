@@ -7117,7 +7117,6 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3PriceThreadCached = true;
     }
 
-    UpdatePhase3SellControlStateFast();
     UpdatePhase3PreparedSellPrice();
     FlushPhase3DisplayPriceEvent();
 
@@ -9505,7 +9504,12 @@ static void PrepareStructuralCache()
         ApplySellVisibilityPatch(program);
 
     if (visibilityResolved)
+    {
+        // Spread the two expensive one-time discovery stages across frames.
+        // No patch is active while this cache-only preparation is running.
+        WAIT(0);
         UpdatePhase3Diagnostics();
+    }
 
     g_prepareStructuralCacheOnly = false;
 
