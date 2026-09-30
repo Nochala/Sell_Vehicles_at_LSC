@@ -13,7 +13,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v0.3.25 debug logging option";
+static const char* kBuildTag = "v0.3.26 startup structural initialization";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -46,6 +46,8 @@ static constexpr uint64_t kDoesScriptWithNameHashExistNative =
     0xF86AA3C56BA31381ULL;
 static constexpr uint64_t kHasScriptWithNameHashLoadedNative =
     0x5F0F0C783EB16C04ULL;
+static constexpr uint64_t kRequestScriptWithNameHashNative =
+    0xD62A67D26D9653E6ULL;
 static constexpr uint64_t kGetNumberOfThreadsRunningScriptHashNative =
     0x2C83A9DA6BFFC4F9ULL;
 static constexpr uint64_t kGetVehicleModelValueNative =
@@ -86,6 +88,8 @@ static ULONGLONG g_nextStockLscScopeCheckAt = 0;
 static ULONGLONG g_nextPhase3ControlUpdateAt = 0;
 static bool g_prepareStructuralCacheOnly = false;
 static bool g_structuralCacheReady = false;
+static bool g_startupStructuralInitializationComplete = false;
+static bool g_startupCarmodProgramPinned = false;
 static constexpr ULONGLONG kStockLscScopePollOutsideMs = 250ULL;
 static constexpr ULONGLONG kStockLscScopePollInsideMs = 100ULL;
 static constexpr ULONGLONG kPhase3ControlUpdateIntervalMs = 16ULL;
@@ -2228,157 +2232,51 @@ static void UpdatePhase2SellExposure()
     if (!g_stockLscScopeActive
         || !g_phase2Enabled
         || g_lastNetworkGame
-        || !InitializePhase2Internals())
+        || !g_structuralCacheReady
+        || !g_startupStructuralInitializationComplete)
     {
         return;
     }
+
+    if (g_phase2PatchApplied)
+        return;
 
     const ULONGLONG now = GetTickCount64();
     if (now < g_nextPhase2ProgramCheckAt)
         return;
 
     g_nextPhase2ProgramCheckAt =
-        now + (g_phase2PatchApplied ? 1000ULL : 50ULL);
+        now + 1000ULL;
 
-    Phase2ScrProgram* program = FindPhase2Program(kCarmodShopHash);
-
-    if (program != g_phase2ObservedProgram)
-    {
-        if (g_phase2ObservedProgram)
-        {
-            Logf(
-                "[Phase2] carmod_shop program changed/unloaded old=%p new=%p",
-                g_phase2ObservedProgram,
-                program);
-        }
-
-        g_phase2ObservedProgram = program;
-        g_phase2AttemptedProgram = nullptr;
-
-        if (program != g_phase3AnalyzedProgram)
-            g_structuralCacheReady = false;
-
-        if (program != g_phase3AnalyzedProgram)
-        {
-            g_phase3AnalyzedProgram = nullptr;
-            g_phase3FunctionCatalog.clear();
-            g_phase3SellHandler = VmFunctionRange{};
-            g_phase3SellHandlerResolved = false;
-            g_phase3TraceUntil = 0;
-            g_phase2NetworkGameNativeIndex = 0xFFFF;
-            g_phase3SellPricePath = Phase3SellPricePath{};
-            g_phase3SellDisplayPriceHook =
-                Phase3SellDisplayPriceHook{};
-            g_phase3SellCooldownPath =
-                Phase3SellCooldownPath{};
-            g_phase3SellCooldownHook =
-                Phase3SellCooldownHook{};
-            g_phase3CooldownGateEventPending = false;
-            g_phase3CooldownGateClockValue = 0;
-            g_phase3CooldownGateRemainingSeconds = 0;
-            g_phase3CooldownLastLoggedRemainingSeconds = -1;
-            ResetPhase3PreparedSellPrice();
-            g_phase3DisplayPriceEventPending = false;
-            g_phase3SellControlPath = Phase3SellControlPath{};
-            g_phase3SellStagePath = Phase3SellStagePath{};
-            g_phase3SellControlState = -1;
-            g_phase3LastLoggedSellControlState = -999;
-            g_phase3CurrentMenuState = -1;
-            g_phase3LastLoggedMenuState = -999;
-            g_phase3SellStageActive = false;
-            g_phase3PriceThreadInfo = Phase2ThreadInfo{};
-            g_phase3PriceThreadCached = false;
-            g_nextPhase3PriceUpdateAt = 0;
-            g_phase3SellEligibilityFunction = VmFunctionRange{};
-            g_phase3NoSell1MessagePush = 0;
-            g_phase3PlayerOwnedHelper = VmFunctionRange{};
-
-            if (program != g_highValueSellPatchedProgram)
-            {
-                g_highValueSellPatchedProgram = nullptr;
-                g_highValueSellPatchPosition = 0;
-                g_highValueSellPatchApplied = false;
-                std::memset(
-                    g_highValueSellOriginal,
-                    0,
-                    sizeof(g_highValueSellOriginal));
-                std::memset(
-                    g_highValueSellPatch,
-                    0,
-                    sizeof(g_highValueSellPatch));
-            }
-
-            if (program != g_sellOwnershipPatchedProgram)
-            {
-                g_sellOwnershipPatchedProgram = nullptr;
-                g_sellOwnershipPatchPositions.clear();
-                g_sellOwnershipPatchBackups.clear();
-                g_sellOwnershipPatchApplied = false;
-            }
-        }
-
-        if (g_phase2PatchedProgram && program != g_phase2PatchedProgram)
-        {
-            g_phase2PatchedProgram = nullptr;
-            g_phase2PatchPosition = 0;
-            g_phase2PatchApplied = false;
-            g_phase2VisibilityBypassActive = false;
-            std::memset(
-                g_phase2OriginalCall,
-                0,
-                sizeof(g_phase2OriginalCall));
-            std::memset(
-                g_phase2VisibilityPatch,
-                0,
-                sizeof(g_phase2VisibilityPatch));
-        }
-    }
+    // The entire Sell structure is resolved and cached during startup.
+    // Never scan the ScriptVM, rebuild catalogs, search strings, or rediscover
+    // carmod_shop while entering the vicinity of LSC.
+    Phase2ScrProgram* program =
+        g_phase2PatchedProgram;
 
     if (!program
-        || g_phase2PatchApplied)
+        || !IsReadableMemory(program, sizeof(*program))
+        || static_cast<uint32_t>(program->nameHash)
+            != kCarmodShopHash
+        || program != g_phase3AnalyzedProgram)
     {
-        return;
-    }
-
-    if (g_structuralCacheReady
-        && program == g_phase2PatchedProgram
-        && program == g_phase3AnalyzedProgram)
-    {
-        if (ReactivateCachedStockLscPatches(
-                program))
-        {
-            g_nextPhase2ProgramCheckAt =
-                now + 1000ULL;
-            return;
-        }
-
-        // A cached write failing is a real compatibility/runtime failure.
-        // Do not fall through into expensive rediscovery every frame.
         g_structuralCacheReady = false;
         Logf(
-            "[Performance] cached LSC patch reactivation failed");
+            "[Startup] cached carmod_shop program became invalid; live vicinity rediscovery is disabled");
         return;
     }
 
-    if (g_phase2AttemptedProgram == program)
+    if (ReactivateCachedStockLscPatches(
+            program))
+    {
         return;
-
-    g_phase2AttemptedProgram = program;
-
-    if (!ApplySellVisibilityPatch(program))
-    {
-        Logf(
-            "[Phase2] Patch attempt FAILED safely program=%p status=%s",
-            program,
-            g_phase2Status.c_str());
     }
-    else
-    {
-        // Apply the character-vehicle policy as soon as the structural Sell
-        // call is resolved, before carmod_shop has a chance to build its root
-        // menu. BeginCarmodShopSession repeats this check as a cheap safeguard.
-        ApplyCharacterVehicleSettingForShop();
-    }
+
+    // Cached reactivation failure is a genuine runtime/compatibility failure.
+    // Do not fall back to structural discovery near LSC.
+    g_structuralCacheReady = false;
+    Logf(
+        "[Performance] cached LSC patch reactivation failed; vicinity rediscovery disabled");
 }
 
 static bool ValidateProgramStrings(Phase2ScrProgram* program)
@@ -9512,7 +9410,7 @@ static void PrepareStructuralCache()
     if (!program)
     {
         Logf(
-            "[Performance] startup structural cache deferred because carmod_shop program is unavailable");
+            "[Startup] structural initialization waiting because carmod_shop program is unavailable");
         return;
     }
 
@@ -9535,13 +9433,13 @@ static void PrepareStructuralCache()
 
     if (!g_structuralCacheReady)
     {
-        // Allow a normal full retry later if the program was not completely
-        // resolvable during startup. No bytecode/native slots were modified.
+        // Startup initialization may retry, but the live LSC vicinity path
+        // is never allowed to perform structural discovery.
         g_phase3AnalyzedProgram = nullptr;
         g_phase2AttemptedProgram = nullptr;
 
         Logf(
-            "[Performance] startup structural cache incomplete; normal LSC fallback remains available");
+            "[Startup] structural initialization incomplete; vicinity discovery is disabled");
         return;
     }
 
@@ -10416,7 +10314,6 @@ void ScriptMain()
             }
 
             UpdatePhase2SellExposure();
-            UpdatePhase3Diagnostics();
 
             if (g_carmodShopActive)
             {
