@@ -9450,6 +9450,57 @@ static void UpdatePhase3Diagnostics()
         && g_phase3SellControlPath.resolved;
 }
 
+static void PrepareStructuralCache()
+{
+    if (g_structuralCacheReady
+        || g_lastNetworkGame
+        || !g_phase2Enabled
+        || !g_phase3Enabled
+        || !InitializePhase2Internals())
+    {
+        return;
+    }
+
+    Phase2ScrProgram* program =
+        FindPhase2Program(
+            kCarmodShopHash);
+
+    if (!program)
+    {
+        Logf(
+            "[Performance] startup structural cache deferred because carmod_shop program is unavailable");
+        return;
+    }
+
+    g_prepareStructuralCacheOnly = true;
+    g_phase2ObservedProgram = program;
+    g_phase2AttemptedProgram = program;
+
+    const bool visibilityResolved =
+        ApplySellVisibilityPatch(program);
+
+    if (visibilityResolved)
+        UpdatePhase3Diagnostics();
+
+    g_prepareStructuralCacheOnly = false;
+
+    if (!g_structuralCacheReady)
+    {
+        // Allow a normal full retry later if the program was not completely
+        // resolvable during startup. No bytecode/native slots were modified.
+        g_phase3AnalyzedProgram = nullptr;
+        g_phase2AttemptedProgram = nullptr;
+
+        Logf(
+            "[Performance] startup structural cache incomplete; normal LSC fallback remains available");
+        return;
+    }
+
+    Logf(
+        "[Performance] startup structural cache ready program=%p; no LSC bytecode/native hooks active",
+        program);
+}
+
 static void ArmPhase3RuntimeTrace(
     const char* reason,
     int depthBefore,
@@ -10226,7 +10277,7 @@ static void LogStartupState()
     Logf("[Info] SellCompletion keeps the validated Sell-stage + iControl trigger unchanged, preserves the 2000 ms post-confirm delay, credits the final dynamically resolved sale price to the active Story Mode character's persistent SP*_TOTAL_CASH account after the transition completes, and briefly shows the native Story Mode cash balance after payout.");
     Logf("[Info] Gameplay cooldown preserves Rockstar's native CMOD_NOSELL3 Sell gate. Story Mode rejects writes to MPPLY_VEHICLE_SELL_TIME, so an exact-site clock hook supplies the elapsed value only to Rockstar's original cooldown comparison. SellCooldownMinutes controls that elapsed window without patching the rejection message or unrelated eligibility checks.");
     Logf("[Info] UseDamagePenalty=%s scales the configured resale price by the worse of body/engine condition. AllowCharacterVehicles=%s uses Rockstar's SP protagonist model+plate definitions to suppress the injected Sell category for those character vehicles.", g_useDamagePenalty ? "on" : "off", g_allowCharacterVehicles ? "yes" : "no");
-    Logf("[Info] Scope: VM patches and native hooks are enabled only within 140m of the four stock Los Santos Customs locations (Burton, LSIA, La Mesa, Harmony). They are restored outside that scope; Beeker's and other customization garages are not patched.");
+    Logf("[Info] Scope/performance: structural Sell discovery is cached once without modifying carmod_shop. Active VM patches/native hooks are enabled only near the four stock Los Santos Customs locations (Burton, LSIA, La Mesa, Harmony), restored outside with 180m hysteresis, and reactivated from cached addresses without rescanning. Beeker's and other customization garages are not patched.");
     Logf("[Info] Performance rule: no heavy per-frame scans or repeated structural discovery are permitted in the live LSC path; expensive work must remain cached, event-driven, or rate-limited.");
     Logf("[Info] Test workflow: enter Story Mode LSC, open Sell, confirm the sale normally, then verify the 2000 ms pause, fade-out, vehicle removal, exterior teleport, fade-in, and one-time Story Mode payout matching the captured Sell price.");
 }
@@ -10259,6 +10310,8 @@ void ScriptMain()
 
     if (phase2Ready)
     {
+        PrepareStructuralCache();
+
         WriteStatusLogLine(
             "SellVehiclesAtLSC Initialized");
     }
@@ -10294,39 +10347,61 @@ void ScriptMain()
                 now + kLogFlushIntervalMs;
         }
 
-        if (now >= g_nextScriptPollAt)
+        UpdateStockLscScope(now);
+
+        if (g_stockLscScopeActive)
         {
-            g_nextScriptPollAt =
-                now + static_cast<ULONGLONG>(
-                    g_scriptPollIntervalMs);
+            if (now >= g_nextScriptPollAt)
+            {
+                g_nextScriptPollAt =
+                    now
+                    + static_cast<ULONGLONG>(
+                        g_scriptPollIntervalMs);
 
-            UpdateNetworkState();
-            PollScriptStates();
-        }
+                UpdateNetworkState();
+                PollScriptStates();
+            }
 
-        UpdatePhase2SellExposure();
-        UpdatePhase3Diagnostics();
-        UpdatePhase3SellPriceFallback();
-        UpdatePhase3SellControlStateFast();
+            UpdatePhase2SellExposure();
+            UpdatePhase3Diagnostics();
 
-        if (g_debugLogActive)
-            LogManualMarker();
+            if (g_carmodShopActive)
+            {
+                UpdatePhase3SellPriceFallback();
 
-        if (g_debugLogActive
-            && g_carmodShopActive
-            && g_logControls)
-        {
-            bool acceptPressed = false;
-            bool cancelPressed = false;
+                if (now
+                    >= g_nextPhase3ControlUpdateAt)
+                {
+                    g_nextPhase3ControlUpdateAt =
+                        now
+                        + kPhase3ControlUpdateIntervalMs;
 
-            PollRelevantControls(
-                acceptPressed,
-                cancelPressed);
+                    UpdatePhase3SellControlStateFast();
+                }
+            }
+
+            if (g_debugLogActive)
+                LogManualMarker();
+
+            if (g_debugLogActive
+                && g_carmodShopActive
+                && g_logControls)
+            {
+                bool acceptPressed = false;
+                bool cancelPressed = false;
+
+                PollRelevantControls(
+                    acceptPressed,
+                    cancelPressed);
+            }
         }
 
         UpdateSellCompletionController();
-        FlushPhase3SellCooldownGateEvent();
 
-        PollPeriodicSnapshot(now);
+        if (g_stockLscScopeActive)
+            FlushPhase3SellCooldownGateEvent();
+
+        if (g_debugLogActive)
+            PollPeriodicSnapshot(now);
     }
 }
