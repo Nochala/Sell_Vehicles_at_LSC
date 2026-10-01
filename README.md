@@ -29,5 +29,5 @@
 ### _calamity-inc_ - GTA decompiled
 
 ## Mod pages:
-- [**GTA5 Mods**]()
-- [**Nexus**]()
+- [**GTA5 Mods**](https://www.gta5-mods.com/scripts/sell-vehicles-at-los-santos-customs#description_tab)
+- [**Nexus**](https://www.nexusmods.com/gta5enhanced/mods/1673)
