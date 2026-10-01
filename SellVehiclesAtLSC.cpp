@@ -1,3 +1,5 @@
+// This mod made me rip my hair out.
+
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
