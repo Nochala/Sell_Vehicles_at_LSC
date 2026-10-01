@@ -11,7 +11,7 @@
 - Latest [**ScriptHookV**](https://www.dev-c.com/gtav/scripthookv/)
 
 ### Features
-- Adds the native GTA Online Sell option to Story Mode Los Santos Customs
+- Adds the native GTA Online Sell option to Los Santos Customs
 - Supports GTA V Legacy and Enhanced
 - Dynamic vehicle sell prices (Configurable via `.ini`)
 - Installed upgrades affect vehicle value (Configurable via `.ini`)
