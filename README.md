@@ -4,7 +4,6 @@
 ### Brings GTA Online's native vehicle selling to ALL Los Santos Customs in Story Mode. 
 
 #### Instead of recreating the Sell menu, this mod directly manipulates Rockstar's native Los Santos Customs scripts. 
-#### Supports both Legacy & Enhanced.
 
 **Fully compatible with both Legacy and Enhanced versions of GTA V.**
 ### Requirements:
