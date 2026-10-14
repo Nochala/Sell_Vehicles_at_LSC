@@ -7,6 +7,8 @@
 #include "main.h"
 #include "script.h"
 
+void ShutdownSellVehiclesAtLSC();
+
 BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID lpReserved)
 {
 	switch (reason)
@@ -16,6 +18,7 @@ BOOL APIENTRY DllMain(HMODULE hInstance, DWORD reason, LPVOID lpReserved)
 		break;
 	case DLL_PROCESS_DETACH:
 		scriptUnregister(hInstance);
+		ShutdownSellVehiclesAtLSC();
 		break;
 	}		
 	return TRUE;

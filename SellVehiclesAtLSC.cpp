@@ -1,5 +1,3 @@
-// This mod made me rip my hair out.
-
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
@@ -88,6 +86,7 @@ static uint32_t g_inputSequence = 0;
 static bool g_stockLscScopeActive = false;
 static ULONGLONG g_nextStockLscScopeCheckAt = 0;
 static ULONGLONG g_nextPhase3ControlUpdateAt = 0;
+static ULONGLONG g_nextPhase3ThreadLookupAt = 0;
 static bool g_prepareStructuralCacheOnly = false;
 static bool g_structuralCacheReady = false;
 static bool g_startupStructuralInitializationComplete = false;
@@ -1867,15 +1866,51 @@ static bool WriteVmPatch(
     uint32_t position,
     const unsigned char patch[4])
 {
-    if ((position >> 14) != ((position + 3) >> 14))
+    if (!program
+        || position >= static_cast<uint32_t>(program->codeSize)
+        || static_cast<uint32_t>(program->codeSize) - position < 4
+        || (position >> 14) != ((position + 3) >> 14))
+    {
         return false;
+    }
 
     unsigned char* address = ScriptCodePointer(program, position);
-    if (!address || !IsReadableMemory(address, 4))
+    if (!address)
         return false;
 
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(address, &memory, sizeof(memory)) == 0
+        || memory.State != MEM_COMMIT
+        || (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+    {
+        return false;
+    }
+
+    const uintptr_t start = reinterpret_cast<uintptr_t>(address);
+    const uintptr_t regionEnd =
+        reinterpret_cast<uintptr_t>(memory.BaseAddress)
+        + memory.RegionSize;
+
+    if (regionEnd < start || regionEnd - start < 4)
+        return false;
+
+    if (std::memcmp(address, patch, 4) == 0)
+        return true;
+
+    const DWORD access = memory.Protect & 0xFFU;
+    const bool writable =
+        access == PAGE_READWRITE
+        || access == PAGE_WRITECOPY
+        || access == PAGE_EXECUTE_READWRITE
+        || access == PAGE_EXECUTE_WRITECOPY;
+
     DWORD oldProtection = 0;
-    if (!VirtualProtect(address, 4, PAGE_EXECUTE_READWRITE, &oldProtection))
+    if (!writable
+        && !VirtualProtect(
+            address,
+            4,
+            PAGE_EXECUTE_READWRITE,
+            &oldProtection))
     {
         Logf(
             "[Phase2] VirtualProtect failed error=%lu",
@@ -1885,8 +1920,11 @@ static bool WriteVmPatch(
 
     std::memcpy(address, patch, 4);
 
-    DWORD ignored = 0;
-    VirtualProtect(address, 4, oldProtection, &ignored);
+    if (!writable)
+    {
+        DWORD ignored = 0;
+        VirtualProtect(address, 4, oldProtection, &ignored);
+    }
 
     return std::memcmp(address, patch, 4) == 0;
 }
@@ -2146,6 +2184,21 @@ static bool SetPhase2SellVisibilityBypass(
     return true;
 }
 
+static bool ShouldExposeSellForCurrentVehicle()
+{
+    if (g_allowCharacterVehicles)
+        return true;
+
+    const Ped playerPed = PLAYER::PLAYER_PED_ID();
+    if (!PED::IS_PED_IN_ANY_VEHICLE(playerPed, false))
+        return true;
+
+    const Vehicle vehicle =
+        PED::GET_VEHICLE_PED_IS_IN(playerPed, false);
+
+    return !IsRockstarCharacterVehicle(vehicle);
+}
+
 static void ApplyCharacterVehicleSettingForShop()
 {
     if (!g_phase2PatchApplied
@@ -2154,39 +2207,14 @@ static void ApplyCharacterVehicleSettingForShop()
         return;
     }
 
-    const Ped playerPed =
-        PLAYER::PLAYER_PED_ID();
-
-    if (!PED::IS_PED_IN_ANY_VEHICLE(
-        playerPed,
-        false))
-    {
-
-        SetPhase2SellVisibilityBypass(
-            true,
-            "no current shop vehicle");
-        return;
-    }
-
-    const Vehicle vehicle =
-        PED::GET_VEHICLE_PED_IS_IN(
-            playerPed,
-            false);
-
-    const bool characterVehicle =
-        IsRockstarCharacterVehicle(vehicle);
-
     const bool exposeSell =
-        g_allowCharacterVehicles
-        || !characterVehicle;
+        ShouldExposeSellForCurrentVehicle();
 
     SetPhase2SellVisibilityBypass(
         exposeSell,
-        characterVehicle
-        ? (g_allowCharacterVehicles
-            ? "character vehicle allowed"
-            : "AllowCharacterVehicles=false")
-        : "non-character vehicle");
+        exposeSell
+        ? "non-character or allowed vehicle"
+        : "AllowCharacterVehicles=false");
 }
 
 static void RestoreCharacterVehicleSettingAfterShop()
@@ -2237,11 +2265,32 @@ static void UpdatePhase2SellExposure()
         return;
     }
 
-    if (ReactivateCachedStockLscPatches(
-        program))
+    LARGE_INTEGER activationStart{};
+    LARGE_INTEGER activationEnd{};
+    LARGE_INTEGER timerFrequency{};
+    QueryPerformanceCounter(&activationStart);
+
+    const bool activated =
+        ReactivateCachedStockLscPatches(program);
+
+    QueryPerformanceCounter(&activationEnd);
+    QueryPerformanceFrequency(&timerFrequency);
+
+    if (timerFrequency.QuadPart > 0)
     {
-        return;
+        const unsigned long long elapsedMicroseconds =
+            static_cast<unsigned long long>(
+                (activationEnd.QuadPart - activationStart.QuadPart)
+                * 1000000LL / timerFrequency.QuadPart);
+
+        Logf(
+            "[Runtime] LSC VM activation durationUs=%llu success=%s",
+            elapsedMicroseconds,
+            activated ? "yes" : "no");
     }
+
+    if (activated)
+        return;
 
     g_structuralCacheReady = false;
     Logf(
@@ -6956,6 +7005,7 @@ static void UpdatePhase3SellPriceFallback()
             g_phase3PriceThreadInfo = Phase2ThreadInfo{};
             g_phase3PriceThreadCached = false;
             g_nextPhase3PriceUpdateAt = 0;
+            g_nextPhase3ThreadLookupAt = 0;
             ResetPhase3PreparedSellPrice();
             g_phase3DisplayPriceEventPending = false;
         }
@@ -6975,6 +7025,11 @@ static void UpdatePhase3SellPriceFallback()
 
     if (!g_phase3PriceThreadCached)
     {
+        if (now < g_nextPhase3ThreadLookupAt)
+            return;
+
+        g_nextPhase3ThreadLookupAt = now + 250ULL;
+
         Phase2ThreadInfo threadInfo{};
         if (!GetPhase2ThreadInfo(
             kCarmodShopHash,
@@ -6986,6 +7041,7 @@ static void UpdatePhase3SellPriceFallback()
 
         g_phase3PriceThreadInfo = threadInfo;
         g_phase3PriceThreadCached = true;
+        g_nextPhase3ThreadLookupAt = 0;
     }
 
     UpdatePhase3PreparedSellPrice();
@@ -7259,7 +7315,6 @@ static void UpdatePhase3SellControlStateFast()
                 g_phase3PreparedMenuState = -999;
             }
 
-            FlushLogBuffer();
         }
 
         g_phase3LastLoggedMenuState =
@@ -7275,7 +7330,6 @@ static void UpdatePhase3SellControlStateFast()
             Logf(
                 "[Phase3P] SellControl state=-1 reason=not-in-sell-stage");
             g_phase3LastLoggedSellControlState = -1;
-            FlushLogBuffer();
         }
 
         return;
@@ -7315,7 +7369,6 @@ static void UpdatePhase3SellControlStateFast()
         g_phase3LastLoggedSellControlState =
             g_phase3SellControlState;
 
-        FlushLogBuffer();
     }
 }
 
@@ -7382,6 +7435,7 @@ static bool WritePhase3NativeHandlerSlot(
     Phase3NativeHandler handler)
 {
     if (!program
+        || !IsReadableMemory(program, sizeof(*program))
         || !handler
         || program->nativeCount <= 0
         || nativeIndex >= static_cast<uint16_t>(program->nativeCount)
@@ -7623,10 +7677,7 @@ static void Phase3SellCooldownClockHook(
         || !g_phase3PriceThreadCached
         || !g_phase3PriceThreadInfo.thread
         || !context
-        || !context->returnValue
-        || !IsReadableMemory(
-            context->returnValue,
-            sizeof(uint64_t)))
+        || !context->returnValue)
     {
         return;
     }
@@ -7643,7 +7694,10 @@ static void Phase3SellCooldownClockHook(
         programCounter)
         || !IsPhase3PcAtNativeSite(
             programCounter,
-            g_phase3SellCooldownHook.nativeSite))
+            g_phase3SellCooldownHook.nativeSite)
+        || !IsReadableMemory(
+            context->returnValue,
+            sizeof(uint64_t)))
     {
         return;
     }
@@ -7825,26 +7879,30 @@ static bool ReactivateCachedStockLscPatches(
         || g_phase3SellDisplayPriceHook.program
         != program
         || !g_phase3SellDisplayPriceHook.original
+        || !g_phase3SellDisplayPriceHook.installed
         || g_phase3SellCooldownHook.program
         != program
-        || !g_phase3SellCooldownHook.original)
+        || !g_phase3SellCooldownHook.original
+        || !g_phase3SellCooldownHook.installed)
     {
         return false;
     }
 
+    const bool exposeSell =
+        ShouldExposeSellForCurrentVehicle();
+
     if (!WriteVmPatch(
         program,
         g_phase2PatchPosition,
-        g_phase2VisibilityPatch))
+        exposeSell
+        ? g_phase2VisibilityPatch
+        : g_phase2OriginalCall))
     {
         return false;
     }
 
     g_phase2PatchApplied = true;
-    g_phase2VisibilityBypassActive = true;
-
-    if (!g_carmodShopActive)
-        WAIT(0);
+    g_phase2VisibilityBypassActive = exposeSell;
 
     if (!WriteVmPatch(
         program,
@@ -7857,9 +7915,6 @@ static bool ReactivateCachedStockLscPatches(
     }
 
     g_highValueSellPatchApplied = true;
-
-    if (!g_carmodShopActive)
-        WAIT(0);
 
     const unsigned char ownershipPatch[4] =
     {
@@ -7884,8 +7939,6 @@ static bool ReactivateCachedStockLscPatches(
             break;
         }
 
-        if (!g_carmodShopActive)
-            WAIT(0);
     }
 
     if (ownershipWritten
@@ -7908,39 +7961,13 @@ static bool ReactivateCachedStockLscPatches(
 
     g_sellOwnershipPatchApplied = true;
 
-    if (!WritePhase3NativeHandlerSlot(
-        program,
-        g_phase3SellDisplayPriceHook.nativeIndex,
-        &Phase3SellDisplayPriceRegisterHook))
-    {
-        RestoreStockLscPatches(
-            "cached display hook reactivation rollback");
-        return false;
-    }
-
-    g_phase3SellDisplayPriceHook.installed =
-        true;
-
-    if (!g_carmodShopActive)
-        WAIT(0);
-
-    if (!WritePhase3NativeHandlerSlot(
-        program,
-        g_phase3SellCooldownHook.nativeIndex,
-        &Phase3SellCooldownClockHook))
-    {
-        RestoreStockLscPatches(
-            "cached cooldown hook reactivation rollback");
-        return false;
-    }
-
-    g_phase3SellCooldownHook.installed =
-        true;
-
     ApplyCharacterVehicleSettingForShop();
 
-    Logf(
-        "[Runtime] LSC patches activated from startup cache");
+    if (g_startupStructuralInitializationComplete)
+    {
+        Logf(
+            "[Runtime] LSC patches activated from startup cache");
+    }
 
     return true;
 }
@@ -7951,56 +7978,12 @@ static void RestoreStockLscPatches(
     const bool hasScopedPatchState =
         g_phase2PatchApplied
         || g_highValueSellPatchApplied
-        || g_sellOwnershipPatchApplied
-        || g_phase3SellDisplayPriceHook.installed
-        || g_phase3SellCooldownHook.installed;
+        || g_sellOwnershipPatchApplied;
 
     if (!hasScopedPatchState)
         return;
 
     bool restoreFailed = false;
-
-    if (g_phase3SellCooldownHook.installed
-        && g_phase3SellCooldownHook.program
-        && g_phase3SellCooldownHook.original)
-    {
-        if (!WritePhase3NativeHandlerSlot(
-            g_phase3SellCooldownHook.program,
-            g_phase3SellCooldownHook.nativeIndex,
-            g_phase3SellCooldownHook.original))
-        {
-            restoreFailed = true;
-            Logf(
-                "[Scope] failed restoring Sell cooldown native hook reason=%s",
-                reason ? reason : "unspecified");
-        }
-        else
-        {
-            g_phase3SellCooldownHook.installed =
-                false;
-        }
-    }
-
-    if (g_phase3SellDisplayPriceHook.installed
-        && g_phase3SellDisplayPriceHook.program
-        && g_phase3SellDisplayPriceHook.original)
-    {
-        if (!WritePhase3NativeHandlerSlot(
-            g_phase3SellDisplayPriceHook.program,
-            g_phase3SellDisplayPriceHook.nativeIndex,
-            g_phase3SellDisplayPriceHook.original))
-        {
-            restoreFailed = true;
-            Logf(
-                "[Scope] failed restoring Sell display-price native hook reason=%s",
-                reason ? reason : "unspecified");
-        }
-        else
-        {
-            g_phase3SellDisplayPriceHook.installed =
-                false;
-        }
-    }
 
     if (g_sellOwnershipPatchApplied
         && g_sellOwnershipPatchedProgram)
@@ -8080,6 +8063,7 @@ static void RestoreStockLscPatches(
         Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase3ThreadLookupAt = 0;
     g_nextPhase3ControlUpdateAt = 0;
     g_phase3CooldownGateEventPending = false;
     g_phase3CooldownGateClockValue = 0;
@@ -9535,6 +9519,39 @@ static void RequestScriptProgramByHash(uint32_t scriptHash)
     nativeCall();
 }
 
+static bool InstallStartupNativeHooks()
+{
+    Phase2ScrProgram* program =
+        g_phase2PatchedProgram;
+
+    if (!g_structuralCacheReady
+        || !program
+        || program != g_phase3AnalyzedProgram
+        || !InstallPhase3SellDisplayPriceHook(program))
+    {
+        return false;
+    }
+
+    if (!InstallPhase3SellCooldownHook(program))
+    {
+        if (g_phase3SellDisplayPriceHook.installed
+            && WritePhase3NativeHandlerSlot(
+                program,
+                g_phase3SellDisplayPriceHook.nativeIndex,
+                g_phase3SellDisplayPriceHook.original))
+        {
+            g_phase3SellDisplayPriceHook.installed = false;
+        }
+
+        return false;
+    }
+
+    Logf(
+        "[Startup] LSC native hooks installed once; gameplay overrides remain scoped to supported shops");
+
+    return true;
+}
+
 static bool InitializeStructuralCacheAtStartup()
 {
     if (g_structuralCacheReady
@@ -9598,6 +9615,41 @@ static bool InitializeStructuralCacheAtStartup()
 
         if (g_structuralCacheReady)
         {
+            if (!InstallStartupNativeHooks())
+            {
+                g_structuralCacheReady = false;
+                Logf(
+                    "[Startup] native hook installation failed; sell patches disabled");
+                return false;
+            }
+
+            if (!ReactivateCachedStockLscPatches(
+                g_phase2PatchedProgram))
+            {
+                RestoreStockLscPatches(
+                    "startup patch page preparation failed");
+                g_structuralCacheReady = false;
+                Logf(
+                    "[Startup] VM patch page preparation failed; sell patches disabled");
+                return false;
+            }
+
+            RestoreStockLscPatches(
+                "startup VM patch page preparation");
+
+            if (g_phase2PatchApplied
+                || g_highValueSellPatchApplied
+                || g_sellOwnershipPatchApplied)
+            {
+                g_structuralCacheReady = false;
+                Logf(
+                    "[Startup] VM patch restore failed; sell patches disabled");
+                return false;
+            }
+
+            Logf(
+                "[Startup] LSC VM patch pages prepared; original instructions restored");
+
             g_startupStructuralInitializationComplete =
                 true;
 
@@ -9953,6 +10005,7 @@ static void BeginCarmodShopSession()
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase3ThreadLookupAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
     ApplyCharacterVehicleSettingForShop();
@@ -9964,7 +10017,6 @@ static void BeginCarmodShopSession()
         NETWORK::NETWORK_IS_GAME_IN_PROGRESS() ? "yes" : "no");
 
     LogVehicleSnapshot("carmod_shop started", true);
-    LogPhase2RuntimeState("carmod_shop started");
 }
 
 static void EndCarmodShopSession()
@@ -9994,6 +10046,7 @@ static void EndCarmodShopSession()
     g_phase3PriceThreadInfo = Phase2ThreadInfo{};
     g_phase3PriceThreadCached = false;
     g_nextPhase3PriceUpdateAt = 0;
+    g_nextPhase3ThreadLookupAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
     if (g_phase3Enabled && g_rootMarkerSet)
@@ -10032,10 +10085,17 @@ static void PollScriptStates()
     {
         ScriptProbe& probe = g_scriptProbes[i];
 
-        const bool exists = DoesScriptExistByHash(probe.hash);
-        const bool loaded = HasScriptLoadedByHash(probe.hash);
         const int runningCount =
             GetRunningScriptCountByHash(probe.hash);
+        const bool refreshMetadata =
+            !probe.initialized
+            || runningCount != probe.runningCount;
+        const bool exists = refreshMetadata
+            ? DoesScriptExistByHash(probe.hash)
+            : probe.exists;
+        const bool loaded = refreshMetadata
+            ? HasScriptLoadedByHash(probe.hash)
+            : probe.loaded;
 
         if (!probe.initialized
             || exists != probe.exists
@@ -10249,6 +10309,39 @@ static void LogStartupState()
         "[Info] Structural discovery runs once at startup; LSC activation uses cached locations only.");
     Logf(
         "[Info] Supported shops: Burton, LSIA, La Mesa, Harmony. Beeker's Garage is excluded.");
+}
+
+void ShutdownSellVehiclesAtLSC()
+{
+    if (g_phase2PatchedProgram
+        && IsReadableMemory(
+            g_phase2PatchedProgram,
+            sizeof(*g_phase2PatchedProgram)))
+    {
+        RestoreStockLscPatches("script unload");
+    }
+
+    if (g_phase3SellCooldownHook.installed
+        && g_phase3SellCooldownHook.program
+        && g_phase3SellCooldownHook.original
+        && WritePhase3NativeHandlerSlot(
+            g_phase3SellCooldownHook.program,
+            g_phase3SellCooldownHook.nativeIndex,
+            g_phase3SellCooldownHook.original))
+    {
+        g_phase3SellCooldownHook.installed = false;
+    }
+
+    if (g_phase3SellDisplayPriceHook.installed
+        && g_phase3SellDisplayPriceHook.program
+        && g_phase3SellDisplayPriceHook.original
+        && WritePhase3NativeHandlerSlot(
+            g_phase3SellDisplayPriceHook.program,
+            g_phase3SellDisplayPriceHook.nativeIndex,
+            g_phase3SellDisplayPriceHook.original))
+    {
+        g_phase3SellDisplayPriceHook.installed = false;
+    }
 }
 
 void ScriptMain()
