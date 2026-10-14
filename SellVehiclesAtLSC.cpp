@@ -445,8 +445,11 @@ static uint32_t Joaat(const char* text)
     return hash;
 }
 
-static bool IsPlayerNearStockLsc()
+static bool IsPlayerNearStockLsc(Vehicle* currentVehicle)
 {
+    if (currentVehicle)
+        *currentVehicle = 0;
+
     const Ped ped =
         PLAYER::PLAYER_PED_ID();
 
@@ -475,6 +478,9 @@ static bool IsPlayerNearStockLsc()
             entity =
                 static_cast<Entity>(
                     vehicle);
+
+            if (currentVehicle)
+                *currentVehicle = vehicle;
         }
     }
 
@@ -514,6 +520,7 @@ static bool IsPlayerNearStockLsc()
 static void RestoreStockLscPatches(
     const char* reason);
 static void EndCarmodShopSession();
+static void UpdateCharacterVehicleSellGateForApproach(Vehicle vehicle);
 
 static void UpdateStockLscScope(
     ULONGLONG now)
@@ -521,8 +528,9 @@ static void UpdateStockLscScope(
     if (now < g_nextStockLscScopeCheckAt)
         return;
 
+    Vehicle currentVehicle = 0;
     const bool nearStockLsc =
-        IsPlayerNearStockLsc();
+        IsPlayerNearStockLsc(&currentVehicle);
 
     g_nextStockLscScopeCheckAt =
         now
@@ -533,6 +541,9 @@ static void UpdateStockLscScope(
     if (nearStockLsc
         == g_stockLscScopeActive)
     {
+        if (nearStockLsc && currentVehicle)
+            UpdateCharacterVehicleSellGateForApproach(currentVehicle);
+
         return;
     }
 
@@ -902,6 +913,14 @@ static int g_phase3LastLoggedSellControlState = -999;
 static int g_phase3CurrentMenuState = -1;
 static int g_phase3LastLoggedMenuState = -999;
 static bool g_phase3SellStageActive = false;
+static Vehicle g_characterRestrictionVehicle = 0;
+static bool g_characterRestrictionInitialized = false;
+static bool g_characterVehicleRestricted = false;
+static bool g_characterShopRestricted = false;
+static ULONGLONG g_characterHelpUntil = 0;
+static bool g_characterHelpDisplayed = false;
+static ULONGLONG g_characterWorkshopViewSince = 0;
+static ULONGLONG g_nextCharacterHelpCheckAt = 0;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -2069,164 +2088,168 @@ static bool ApplySellVisibilityPatch(Phase2ScrProgram* program)
     return true;
 }
 
-static bool PlateTextEquals(
-    Vehicle vehicle,
-    const char* expected)
+static bool PlateTextEquals(Vehicle vehicle, const char* expected)
 {
-    if (vehicle == 0
-        || !expected)
-    {
+    if (!vehicle || !expected)
         return false;
-    }
 
-    const char* plate =
-        VEHICLE::GET_VEHICLE_NUMBER_PLATE_TEXT(
-            vehicle);
-
+    const char* plate = VEHICLE::GET_VEHICLE_NUMBER_PLATE_TEXT(vehicle);
     if (!plate)
         return false;
 
     char normalized[16]{};
-    strncpy_s(
-        normalized,
-        sizeof(normalized),
-        plate,
-        _TRUNCATE);
+    char comparison[16]{};
+    size_t a = 0;
+    size_t b = 0;
 
-    size_t length =
-        strnlen_s(
-            normalized,
-            sizeof(normalized));
-
-    while (length > 0
-        && normalized[length - 1] == ' ')
+    for (size_t i = 0; plate[i] && a < sizeof(normalized) - 1; ++i)
     {
-        normalized[--length] = '\0';
+        if (plate[i] != ' ')
+            normalized[a++] = plate[i];
     }
 
-    return _stricmp(
-        normalized,
-        expected) == 0;
+    for (size_t i = 0; expected[i] && b < sizeof(comparison) - 1; ++i)
+    {
+        if (expected[i] != ' ')
+            comparison[b++] = expected[i];
+    }
+
+    return _stricmp(normalized, comparison) == 0;
 }
 
-static bool IsRockstarCharacterVehicle(
-    Vehicle vehicle)
+static bool IsRockstarCharacterVehicle(Vehicle vehicle)
 {
-    if (vehicle == 0
-        || !ENTITY::DOES_ENTITY_EXIST(vehicle))
-    {
+    if (!vehicle || !ENTITY::DOES_ENTITY_EXIST(vehicle))
         return false;
-    }
 
-    const Hash model =
-        ENTITY::GET_ENTITY_MODEL(vehicle);
-
+    const Hash model = ENTITY::GET_ENTITY_MODEL(vehicle);
     if (model == Joaat("tailgater"))
         return PlateTextEquals(vehicle, "5MDS003");
-
     if (model == Joaat("premier"))
         return PlateTextEquals(vehicle, "880HS955");
-
     if (model == Joaat("bodhi2"))
-        return PlateTextEquals(vehicle, "BETTY 32");
-
+        return PlateTextEquals(vehicle, "BETTY32");
     if (model == Joaat("buffalo2"))
         return PlateTextEquals(vehicle, "FC1988");
-
     if (model == Joaat("bagger"))
         return PlateTextEquals(vehicle, "FC88");
+    if (model == Joaat("issi2") || model == Joaat("issi"))
+        return PlateTextEquals(vehicle, "P3RSEUS");
+    if (model == Joaat("sentinel") || model == Joaat("sentinel2"))
+        return PlateTextEquals(vehicle, "KRYST4L");
+    if (model == Joaat("bjxl"))
+        return PlateTextEquals(vehicle, "57EIG117");
+    if (model == Joaat("blazer3"))
+        return true;
 
     return false;
 }
 
-static bool SetPhase2SellVisibilityBypass(
-    bool enabled,
-    const char* reason)
+static bool SetCharacterSellVisibility(bool enabled)
 {
     if (!g_phase2PatchApplied
         || !g_phase2PatchedProgram
-        || g_phase2PatchPosition == 0)
+        || !g_phase2PatchPosition)
     {
         return false;
     }
 
-    if (g_phase2VisibilityBypassActive
-        == enabled)
-    {
+    if (g_phase2VisibilityBypassActive == enabled)
         return true;
-    }
 
-    const unsigned char* bytes =
-        enabled
+    const unsigned char* bytes = enabled
         ? g_phase2VisibilityPatch
         : g_phase2OriginalCall;
 
-    if (!WriteVmPatch(
-        g_phase2PatchedProgram,
-        g_phase2PatchPosition,
-        bytes))
+    if (!WriteVmPatch(g_phase2PatchedProgram, g_phase2PatchPosition, bytes))
     {
-        Logf(
-            "[Gameplay] CharacterVehicle Sell visibility toggle failed enabled=%s reason=%s",
-            enabled ? "yes" : "no",
-            reason ? reason : "unspecified");
+        Logf("[Gameplay] CharacterVehicle Sell gate update failed enabled=%s",
+            enabled ? "yes" : "no");
         return false;
     }
 
-    g_phase2VisibilityBypassActive =
-        enabled;
-
-    Logf(
-        "[Gameplay] CharacterVehicle Sell visibility exposed=%s reason=%s",
-        enabled ? "yes" : "no",
-        reason ? reason : "unspecified");
-
+    g_phase2VisibilityBypassActive = enabled;
+    Logf("[Gameplay] CharacterVehicle Sell gate enabled=%s",
+        enabled ? "yes" : "no");
     return true;
 }
 
 static bool ShouldExposeSellForCurrentVehicle()
 {
-    if (g_allowCharacterVehicles)
+    if (!g_stockLscScopeActive || g_lastNetworkGame)
         return true;
 
-    const Ped playerPed = PLAYER::PLAYER_PED_ID();
-    if (!PED::IS_PED_IN_ANY_VEHICLE(playerPed, false))
-        return true;
+    const Ped ped = PLAYER::PLAYER_PED_ID();
+    const Vehicle vehicle = ped && PED::IS_PED_IN_ANY_VEHICLE(ped, false)
+        ? PED::GET_VEHICLE_PED_IS_IN(ped, false)
+        : 0;
 
-    const Vehicle vehicle =
-        PED::GET_VEHICLE_PED_IS_IN(playerPed, false);
+    if (!vehicle && g_carmodShopActive && g_characterRestrictionInitialized)
+        return !g_characterVehicleRestricted;
 
-    return !IsRockstarCharacterVehicle(vehicle);
+    if (!g_characterRestrictionInitialized
+        || g_characterRestrictionVehicle != vehicle)
+    {
+        g_characterRestrictionVehicle = vehicle;
+        g_characterRestrictionInitialized = true;
+        g_characterVehicleRestricted = !g_allowCharacterVehicles
+            && IsRockstarCharacterVehicle(vehicle);
+
+        Logf("[Gameplay] CharacterVehicle restriction model=%08X blocked=%s",
+            vehicle ? static_cast<unsigned int>(ENTITY::GET_ENTITY_MODEL(vehicle)) : 0U,
+            g_characterVehicleRestricted ? "yes" : "no");
+    }
+
+    return !g_characterVehicleRestricted;
+}
+
+static void UpdateCharacterVehicleSellGate()
+{
+    if (!g_phase2PatchApplied || !g_stockLscScopeActive || g_lastNetworkGame)
+        return;
+
+    SetCharacterSellVisibility(ShouldExposeSellForCurrentVehicle());
+}
+
+static void UpdateCharacterVehicleSellGateForApproach(Vehicle vehicle)
+{
+    if (g_phase2PatchApplied
+        && (vehicle != g_characterRestrictionVehicle
+            || g_phase2VisibilityBypassActive == g_characterVehicleRestricted))
+    {
+        UpdateCharacterVehicleSellGate();
+
+        if (g_carmodShopActive)
+        {
+            g_characterShopRestricted = g_characterVehicleRestricted;
+            g_characterHelpUntil = 0;
+            g_characterHelpDisplayed = false;
+            g_characterWorkshopViewSince = 0;
+            g_nextCharacterHelpCheckAt = 0;
+        }
+    }
 }
 
 static void ApplyCharacterVehicleSettingForShop()
 {
-    if (!g_phase2PatchApplied
-        || g_lastNetworkGame)
-    {
-        return;
-    }
-
-    const bool exposeSell =
-        ShouldExposeSellForCurrentVehicle();
-
-    SetPhase2SellVisibilityBypass(
-        exposeSell,
-        exposeSell
-        ? "non-character or allowed vehicle"
-        : "AllowCharacterVehicles=false");
+    UpdateCharacterVehicleSellGate();
 }
 
-static void RestoreCharacterVehicleSettingAfterShop()
+static void ShowCharacterVehicleSellHelp()
 {
-    if (!g_allowCharacterVehicles
-        && g_phase2PatchApplied
-        && !g_phase2VisibilityBypassActive)
-    {
-        SetPhase2SellVisibilityBypass(
-            true,
-            "shop ended");
-    }
+    static const char message[] = "You cannot sell this vehicle.";
+    nativeInit(0x8509B634FBE7DA11ULL);
+    nativePush64(reinterpret_cast<uint64_t>("STRING"));
+    nativeCall();
+    nativeInit(0x6C188BE134E074AAULL);
+    nativePush64(reinterpret_cast<uint64_t>(message));
+    nativeCall();
+    nativeInit(0x238FFE5C7B0498A6ULL);
+    nativePush64(0ULL);
+    nativePush64(0ULL);
+    nativePush64(0ULL);
+    nativePush64(static_cast<uint64_t>(-1LL));
+    nativeCall();
 }
 
 static void UpdatePhase2SellExposure()
@@ -5884,7 +5907,7 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x1044926FU, 1329000 },
     { 0x1149422FU, 22000 },
     { 0x11962E49U, 3870000 },
-    { 0x11AA0E14U, 864500 },
+    { 0x11AA0E14U, 86450 },
     { 0x11CBC051U, 192000 },
     { 0x11F58A5AU, 670000 },
     { 0x11F76C14U, 15000 },
@@ -5894,25 +5917,25 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x13B57D8AU, 185000 },
     { 0x142E0DC3U, 240000 },
     { 0x1446590AU, 3515000 },
-    { 0x149BD32AU, 18420500 },
+    { 0x149BD32AU, 1842050 },
     { 0x14D22159U, 230000 },
     { 0x14D69010U, 225000 },
     { 0x1573422DU, 890000 },
-    { 0x163F8520U, 13218750 },
+    { 0x163F8520U, 1321875 },
     { 0x16E478C1U, 110000 },
     { 0x171C92C4U, 1400000 },
     { 0x17420102U, 225000 },
     { 0x177DA45CU, 1470000 },
-    { 0x17DF5EC2U, 1966210 },
+    { 0x17DF5EC2U, 196621 },
     { 0x185484E1U, 500000 },
     { 0x185E2FF3U, 1268000 },
     { 0x18619B7EU, 580000 },
-    { 0x187D938DU, 6982500 },
+    { 0x187D938DU, 698250 },
     { 0x18F25AC7U, 440000 },
     { 0x196F9418U, 1775000 },
     { 0x19DD9ED1U, 1245000 },
-    { 0x1A79847AU, 598500 },
-    { 0x1A861243U, 22849400 },
+    { 0x1A79847AU, 59850 },
+    { 0x1A861243U, 2284940 },
     { 0x1AAD0DEDU, 3724000 },
     { 0x1ABA13B5U, 8000 },
     { 0x1B8165D3U, 1650000 },
@@ -5925,11 +5948,12 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x1DD4C0FFU, 909000 },
     { 0x1F3766E3U, 55000 },
     { 0x1F52A43FU, 325000 },
-    { 0x20314B42U, 21386400 },
+    { 0x20314B42U, 2138640 },
     { 0x206D1B68U, 100000 },
-    { 0x2189D250U, 30922500 },
+    { 0x2189D250U, 3092250 },
     { 0x2290C50AU, 1260000 },
     { 0x23CA25F2U, 625000 },
+    { 0x24626C26U, 1990000 },
     { 0x250B0C5EU, 1625000 },
     { 0x2560B2FCU, 45000 },
     { 0x25676EAFU, 135000 },
@@ -5937,14 +5961,15 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x258C9364U, 1580000 },
     { 0x25C5AF13U, 565000 },
     { 0x25CBE2E2U, 247000 },
-    { 0x26321E67U, 9975000 },
+    { 0x26321E67U, 997500 },
     { 0x2714AA93U, 2820000 },
     { 0x276D98A3U, 1145000 },
     { 0x27816B7EU, 1720000 },
     { 0x27B4E6B0U, 513000 },
     { 0x27D79225U, 1609000 },
-    { 0x287FA449U, 38703000 },
-    { 0x28AD20E1U, 2926000 },
+    { 0x27E34161U, 2980000 },
+    { 0x287FA449U, 3870300 },
+    { 0x28AD20E1U, 1300000 },
     { 0x28B67ACAU, 250000 },
     { 0x28EAB80FU, 718000 },
     { 0x29B0DA97U, 11000 },
@@ -5962,15 +5987,17 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x2C634FBDU, 1300000 },
     { 0x2D3BD401U, 950000 },
     { 0x2DB8D1AAU, 150000 },
+    { 0x2E3967B0U, 1669000 },
     { 0x2EA68690U, 1500000 },
     { 0x2EC385FEU, 695000 },
     { 0x2EF89E46U, 7000 },
     { 0x2F03547BU, 1750000 },
+    { 0x2FDA9E05U, 1485000 },
     { 0x30D3F6D8U, 1995000 },
     { 0x30FF0190U, 412000 },
     { 0x31F0B376U, 1825000 },
     { 0x3201DD49U, 900000 },
-    { 0x32174AFCU, 15308750 },
+    { 0x32174AFCU, 1530875 },
     { 0x322CF98FU, 140000 },
     { 0x32B29A4BU, 27000 },
     { 0x33581161U, 299000 },
@@ -5978,33 +6005,35 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x3404691CU, 1718000 },
     { 0x3412AE2DU, 95000 },
     { 0x34B7390FU, 42000 },
-    { 0x34B82784U, 35245000 },
-    { 0x34DBA661U, 31853500 },
+    { 0x34B82784U, 2750000 },
+    { 0x34DBA661U, 2500000 },
     { 0x34DD8AA1U, 16000 },
     { 0x35DED0DDU, 990000 },
     { 0x360A438EU, 154000 },
     { 0x36A167E0U, 925000 },
     { 0x36B4A8A9U, 2375000 },
     { 0x378236E1U, 360000 },
-    { 0x381E10BDU, 57456000 },
-    { 0x3822BDFEU, 9044000 },
+    { 0x381E10BDU, 3750000 },
+    { 0x3822BDFEU, 904400 },
+    { 0x39085F47U, 4500000 },
     { 0x3944D5A0U, 2740000 },
     { 0x39D6779EU, 275000 },
     { 0x39D6E83FU, 3990000 },
     { 0x39DA2754U, 12000 },
     { 0x39F9C898U, 375000 },
     { 0x3ADB9758U, 1224000 },
-    { 0x3AF76F4AU, 38304000 },
+    { 0x3AF76F4AU, 3830400 },
     { 0x3AF8C345U, 38000 },
-    { 0x3C26BD0CU, 12095000 },
+    { 0x3B639C8DU, 1280000 },
+    { 0x3C26BD0CU, 1209500 },
     { 0x3C4E2113U, 665000 },
     { 0x3D29CD2BU, 195000 },
     { 0x3D7C6410U, 2825000 },
     { 0x3D8FA25CU, 120000 },
     { 0x3DA47243U, 1440000 },
-    { 0x3DC92356U, 26533500 },
+    { 0x3DC92356U, 2653350 },
     { 0x3DEE5EDAU, 42000 },
-    { 0x3E2E4F8AU, 51737000 },
+    { 0x3E2E4F8AU, 4100000 },
     { 0x3E3D1F59U, 2325000 },
     { 0x3E5BD8D9U, 1225000 },
     { 0x3EAB5555U, 350000 },
@@ -6012,7 +6041,7 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x3FD5AA2FU, 1750000 },
     { 0x400F5147U, 252000 },
     { 0x4019CB4CU, 5150000 },
-    { 0x403820E8U, 13233500 },
+    { 0x403820E8U, 1323350 },
     { 0x404B6381U, 400000 },
     { 0x40C332A3U, 225000 },
     { 0x4131F378U, 605000 },
@@ -6028,8 +6057,8 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x43779C54U, 8000 },
     { 0x440851D8U, 1797000 },
     { 0x4543B74DU, 13000 },
-    { 0x4662BCBBU, 14896000 },
-    { 0x46699F47U, 37040500 },
+    { 0x4662BCBBU, 1489600 },
+    { 0x46699F47U, 4500000 },
     { 0x4669D038U, 2997000 },
     { 0x47BBCF2EU, 253000 },
     { 0x48CECED3U, 30000 },
@@ -6046,13 +6075,14 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x4C8DBA51U, 2400000 },
     { 0x4DC079D7U, 1627000 },
     { 0x4EE74355U, 2750000 },
+    { 0x4FA9970BU, 1810000 },
     { 0x4FAF0D70U, 2200000 },
     { 0x4FB1A214U, 60000 },
     { 0x4FF77E37U, 950000 },
     { 0x506434F6U, 82000 },
     { 0x50732C82U, 60000 },
     { 0x5097F589U, 1603000 },
-    { 0x50A6FB9CU, 24805000 },
+    { 0x50A6FB9CU, 2480500 },
     { 0x50D4D19FU, 1425000 },
     { 0x51D83328U, 120000 },
     { 0x5216AD5EU, 1370000 },
@@ -6060,13 +6090,14 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x546DA331U, 1490000 },
     { 0x5502626CU, 1750000 },
     { 0x55365079U, 610000 },
-    { 0x56C8A5EFU, 3660000 },
+    { 0x56C8A5EFU, 4250000 },
     { 0x56CDEE7DU, 1285000 },
     { 0x56D42971U, 718000 },
     { 0x57F682AFU, 130000 },
-    { 0x586765FBU, 47215000 },
+    { 0x586765FBU, 5750000 },
+    { 0x5882160FU, 2290000 },
     { 0x58B3979CU, 25000 },
-    { 0x58CDAF30U, 36575000 },
+    { 0x58CDAF30U, 2500000 },
     { 0x58CF185CU, 208000 },
     { 0x58E316C7U, 1995000 },
     { 0x58F77553U, 3400000 },
@@ -6075,28 +6106,30 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x59E0FBF3U, 9000 },
     { 0x5B531351U, 1845000 },
     { 0x5BA0FF1EU, 1089000 },
-    { 0x5BEB3CE0U, 30762900 },
+    { 0x5BEB3CE0U, 3076290 },
     { 0x5C23AF9BU, 850000 },
     { 0x5C55CB39U, 155000 },
+    { 0x5C6C00B4U, 1835000 },
     { 0x5D1903F9U, 710000 },
     { 0x5D56F01BU, 4788000 },
     { 0x5E4327C8U, 845000 },
     { 0x5EE005DAU, 1795000 },
     { 0x6068AD86U, 335000 },
-    { 0x619C1B82U, 22849400 },
+    { 0x619C1B82U, 2284940 },
     { 0x61FE4D6AU, 870000 },
     { 0x6210CBB0U, 9000 },
-    { 0x6290F15BU, 3205300 },
+    { 0x6290F15BU, 320530 },
     { 0x6322B39AU, 2200000 },
     { 0x63ABADE7U, 9000 },
     { 0x64DE07A1U, 3800000 },
     { 0x64F49967U, 1308000 },
     { 0x665F785DU, 925000 },
-    { 0x669EB40AU, 15308750 },
+    { 0x669EB40AU, 1530875 },
     { 0x66B4FC45U, 10000 },
     { 0x67D2B389U, 500000 },
-    { 0x67D52852U, 13218750 },
+    { 0x67D52852U, 1321875 },
     { 0x6827CF72U, 2240000 },
+    { 0x6838FC1DU, 2355000 },
     { 0x6882FA73U, 48000 },
     { 0x68A5D1EFU, 1550000 },
     { 0x69F06B57U, 15000 },
@@ -6112,19 +6145,20 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x6F946279U, 485000 },
     { 0x6FACDF31U, 48000 },
     { 0x6FF0F727U, 149000 },
+    { 0x70241EEAU, 1880000 },
     { 0x706E2B40U, 599000 },
     { 0x707E63A4U, 816000 },
     { 0x710A2B9BU, 370000 },
-    { 0x711D4738U, 11305000 },
+    { 0x711D4738U, 1130500 },
     { 0x71CB2FFBU, 24000 },
     { 0x71CBEA98U, 940000 },
-    { 0x71D3B6F0U, 38703000 },
+    { 0x71D3B6F0U, 3870300 },
     { 0x72934BE4U, 438000 },
     { 0x72A4C31EU, 71000 },
     { 0x734C5E50U, 745000 },
     { 0x73920F8EU, 3295000 },
     { 0x7397224CU, 1535000 },
-    { 0x73F4110EU, 957600 },
+    { 0x73F4110EU, 95760 },
     { 0x761E2AD3U, 2000000 },
     { 0x767164D6U, 1950000 },
     { 0x76D7C404U, 1900000 },
@@ -6135,18 +6169,18 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x79178F0AU, 1620000 },
     { 0x794CB30CU, 264000 },
     { 0x7980BDD5U, 1800000 },
-    { 0x798682A2U, 26666500 },
+    { 0x798682A2U, 2666650 },
     { 0x79DD18AEU, 1775000 },
     { 0x7A2EF5E4U, 885000 },
     { 0x7B406EFBU, 2550000 },
     { 0x7B47A6A7U, 650000 },
-    { 0x7B54A9D3U, 38902500 },
-    { 0x7B7E56F0U, 8977500 },
+    { 0x7B54A9D3U, 8000000 },
+    { 0x7B7E56F0U, 897750 },
     { 0x7B8AB45FU, 195000 },
     { 0x7E8F677FU, 2700000 },
     { 0x7F3415E3U, 378000 },
     { 0x7F5C91F1U, 85000 },
-    { 0x7F81A829U, 26666500 },
+    { 0x7F81A829U, 2666650 },
     { 0x806B9CC3U, 16000 },
     { 0x810369E2U, 1000000 },
     { 0x8125BCF9U, 8000 },
@@ -6162,11 +6196,11 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x82CAC433U, 1250000 },
     { 0x82E47E85U, 1280000 },
     { 0x82E499FAU, 875000 },
-    { 0x83051506U, 12635000 },
-    { 0x83070B62U, 3318350 },
+    { 0x83051506U, 1263500 },
+    { 0x83070B62U, 331835 },
     { 0x8408F33AU, 785000 },
     { 0x84718D34U, 525000 },
-    { 0x8526E2F5U, 13218750 },
+    { 0x8526E2F5U, 1321875 },
     { 0x85E8E76BU, 1189000 },
     { 0x8612B64BU, 22000 },
     { 0x8644331AU, 1609000 },
@@ -6174,24 +6208,24 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x866BCE26U, 695000 },
     { 0x86FE0B60U, 254000 },
     { 0x877358ADU, 645000 },
-    { 0x885F3671U, 7315000 },
+    { 0x885F3671U, 731500 },
     { 0x8911B9F5U, 145000 },
     { 0x897AFC65U, 1375000 },
-    { 0x89BA59F5U, 23009000 },
+    { 0x89BA59F5U, 2300900 },
     { 0x8B13F083U, 30000 },
     { 0x8B213907U, 3115000 },
     { 0x8C2BD0DCU, 585000 },
     { 0x8CB29A14U, 132000 },
     { 0x8CF5CAE1U, 900000 },
-    { 0x8D45DF49U, 12095000 },
+    { 0x8D45DF49U, 1209500 },
     { 0x8D4B7A8AU, 2025000 },
-    { 0x8E08EC82U, 6583500 },
+    { 0x8E08EC82U, 658350 },
     { 0x8E9254FBU, 26000 },
     { 0x8F0E3594U, 38000 },
-    { 0x8F49AE28U, 26666500 },
+    { 0x8F49AE28U, 2666650 },
     { 0x8FB66F9BU, 10000 },
     { 0x8FD54EBBU, 1862000 },
-    { 0x9114EADAU, 17955000 },
+    { 0x9114EADAU, 1795500 },
     { 0x91373058U, 1615000 },
     { 0x91CA96EEU, 1500000 },
     { 0x920016F1U, 2295000 },
@@ -6211,14 +6245,14 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x97398A4BU, 695000 },
     { 0x97553C28U, 1475000 },
     { 0x97E55D11U, 300000 },
-    { 0x9804F4C7U, 12095000 },
+    { 0x9804F4C7U, 1209500 },
     { 0x98F65A5EU, 1510000 },
     { 0x991EFC04U, 1878000 },
     { 0x9A474B5EU, 1545000 },
-    { 0x9A9EB7DEU, 36575000 },
+    { 0x9A9EB7DEU, 3657500 },
     { 0x9AE6DDA1U, 155000 },
     { 0x9B065C9EU, 1609000 },
-    { 0x9B16A3B4U, 31255000 },
+    { 0x9B16A3B4U, 3125500 },
     { 0x9B909C94U, 15000 },
     { 0x9C429B6AU, 450000 },
     { 0x9C5E5644U, 3330000 },
@@ -6227,12 +6261,12 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0x9CFFFC56U, 995000 },
     { 0x9D0450CAU, 780000 },
     { 0x9D96B45BU, 32000 },
-    { 0x9DAE1398U, 25536000 },
+    { 0x9DAE1398U, 2553600 },
     { 0x9F4B77BEU, 150000 },
     { 0x9F6ED5A2U, 1875000 },
     { 0xA0438767U, 100000 },
-    { 0xA09E15FDU, 37905000 },
-    { 0xA1355F67U, 17556000 },
+    { 0xA09E15FDU, 3790500 },
+    { 0xA1355F67U, 1755600 },
     { 0xA1B3A871U, 1970000 },
     { 0xA29D6D10U, 975000 },
     { 0xA29F78B0U, 909000 },
@@ -6242,27 +6276,29 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xA4A4E453U, 380000 },
     { 0xA4D99B7DU, 1375000 },
     { 0xA4F52C13U, 1740000 },
-    { 0xA52F6866U, 21213500 },
+    { 0xA52F6866U, 2121350 },
     { 0xA5325278U, 67000 },
+    { 0xA617546CU, 1311000 },
     { 0xA6297CC8U, 1590000 },
     { 0xA703E4A9U, 995000 },
+    { 0xA71D0D4FU, 1720000 },
     { 0xA774B5A6U, 116000 },
     { 0xA7CE1BC5U, 715000 },
-    { 0xA7DCC35CU, 21386400 },
+    { 0xA7DCC35CU, 2138640 },
     { 0xA7EDE74DU, 10000 },
     { 0xA8E38B01U, 130000 },
     { 0xA960B13EU, 8000 },
     { 0xA988D3A2U, 25000 },
     { 0xA9EC907BU, 2765000 },
     { 0xAA699BB6U, 25000 },
-    { 0xAA6F980AU, 38503500 },
+    { 0xAA6F980AU, 3850350 },
     { 0xAC33179CU, 915000 },
     { 0xAC4E93C9U, 145000 },
     { 0xAC5DF515U, 725000 },
-    { 0xAD6065C0U, 44555000 },
+    { 0xAD6065C0U, 4455500 },
     { 0xAE0A3D4FU, 1132000 },
     { 0xAE12C99CU, 1269000 },
-    { 0xAE2BFE94U, 1263500 },
+    { 0xAE2BFE94U, 126350 },
     { 0xAED64A63U, 180000 },
     { 0xAF0B8D48U, 2310000 },
     { 0xAF599F01U, 630000 },
@@ -6280,6 +6316,7 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xB4F32118U, 1675000 },
     { 0xB52B5113U, 65000 },
     { 0xB53C6C52U, 2275000 },
+    { 0xB581BF9AU, 1250000 },
     { 0xB5D306A4U, 1495000 },
     { 0xB5EF4C33U, 3750000 },
     { 0xB6410173U, 249000 },
@@ -6288,7 +6325,7 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xB779A091U, 1000000 },
     { 0xB79C1BF5U, 1150000 },
     { 0xB79F589EU, 10000000 },
-    { 0xB7D9F7F1U, 21080500 },
+    { 0xB7D9F7F1U, 2108050 },
     { 0xB802DD46U, 3000 },
     { 0xB820ED5EU, 160000 },
     { 0xB8D657ADU, 1995000 },
@@ -6298,7 +6335,7 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xBA5334ACU, 498000 },
     { 0xBB6B404FU, 9000 },
     { 0xBB78956AU, 3465000 },
-    { 0xBBA2A2F7U, 30762900 },
+    { 0xBBA2A2F7U, 3076290 },
     { 0xBC32A33BU, 50000 },
     { 0xBC5DC07EU, 1980000 },
     { 0xBC7C0A00U, 2165000 },
@@ -6306,29 +6343,30 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xBCDE91F0U, 330000 },
     { 0xBD1B39C3U, 60000 },
     { 0xBE0E6126U, 350000 },
-    { 0xBE11EFC6U, 21386400 },
+    { 0xBE11EFC6U, 2138640 },
     { 0xBE819C63U, 30000 },
     { 0xBF1691E0U, 448000 },
     { 0xC0240885U, 995000 },
     { 0xC07107EEU, 1325000 },
     { 0xC1A8A914U, 1310000 },
     { 0xC1AE4D16U, 100000 },
-    { 0xC1CE1183U, 4139900 },
+    { 0xC1CE1183U, 413990 },
     { 0xC1E908D2U, 126000 },
-    { 0xC2974024U, 168990 },
+    { 0xC2974024U, 16899 },
     { 0xC397F748U, 390000 },
     { 0xC3D7C72BU, 99000 },
     { 0xC3DDFDCEU, 55000 },
-    { 0xC3F25753U, 12967500 },
+    { 0xC3F25753U, 1296750 },
     { 0xC4810400U, 2250000 },
     { 0xC514AAE0U, 145000 },
     { 0xC52C6B93U, 725000 },
     { 0xC575DF11U, 705000 },
     { 0xC58DA34AU, 1850000 },
     { 0xC5DD6967U, 1596000 },
+    { 0xC79C754AU, 2010000 },
     { 0xC7E55211U, 1625000 },
     { 0xC96B73D9U, 315000 },
-    { 0xC972A155U, 2995000 },
+    { 0xC972A155U, 3750000 },
     { 0xC98BBAD6U, 520000 },
     { 0xC9CEAF06U, 9000 },
     { 0xC9E8FF76U, 5985000 },
@@ -6339,23 +6377,24 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xCB0E7CD9U, 325000 },
     { 0xCB642637U, 797000 },
     { 0xCCE5C8FAU, 895000 },
-    { 0xCD93A7DBU, 7420140 },
+    { 0xCD93A7DBU, 742014 },
     { 0xCE0B9F22U, 1220000 },
     { 0xCE44C4B9U, 1700000 },
     { 0xCE6B35A4U, 550000 },
     { 0xCEC6B9B7U, 21000 },
     { 0xCEEA3F4BU, 450000 },
     { 0xCFCFEB3BU, 50000 },
-    { 0xD039510BU, 38703000 },
+    { 0xD039510BU, 3870300 },
     { 0xD1AD4937U, 701000 },
     { 0xD2D5E00EU, 196000 },
-    { 0xD2F77E37U, 22849400 },
-    { 0xD35698EFU, 31255000 },
+    { 0xD2F77E37U, 2284940 },
+    { 0xD3046147U, 1795000 },
+    { 0xD35698EFU, 3125500 },
     { 0xD37B7976U, 80000 },
     { 0xD4AE63D9U, 1815000 },
-    { 0xD556917CU, 15308750 },
+    { 0xD556917CU, 1530875 },
     { 0xD577C962U, 500000 },
-    { 0xD6BC7523U, 33117000 },
+    { 0xD6BC7523U, 1500000 },
     { 0xD6FB0F30U, 1132000 },
     { 0xD756460CU, 29000 },
     { 0xD757D97DU, 1925000 },
@@ -6364,8 +6403,9 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xD83C13CEU, 6000 },
     { 0xD86A0247U, 2875000 },
     { 0xD876DBE2U, 695000 },
+    { 0xD8A914D3U, 1989500 },
     { 0xD9927FE3U, 240000 },
-    { 0xD9F0503DU, 46284000 },
+    { 0xD9F0503DU, 4000000 },
     { 0xDA288376U, 12000 },
     { 0xDA5819A3U, 385000 },
     { 0xDA5EC7DAU, 1380000 },
@@ -6378,31 +6418,33 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xDC434E51U, 35000 },
     { 0xDCBCBE48U, 80000 },
     { 0xDCE1D9F7U, 375000 },
-    { 0xDD71BFEBU, 30762900 },
+    { 0xDD71BFEBU, 3076290 },
     { 0xDE05FB87U, 122000 },
     { 0xDE3D9D22U, 95000 },
     { 0xE18195B2U, 80000 },
     { 0xE1C03AB0U, 1300000 },
     { 0xE2504942U, 195000 },
     { 0xE33A477BU, 495000 },
+    { 0xE478B977U, 950000 },
     { 0xE505CF99U, 1715000 },
     { 0xE550775BU, 905000 },
     { 0xE5BA6858U, 81000 },
     { 0xE62B361BU, 490000 },
     { 0xE6401328U, 522000 },
     { 0xE644E480U, 85000 },
-    { 0xE6E967F8U, 6118000 },
+    { 0xE6E967F8U, 611800 },
     { 0xE78CC3D9U, 1610000 },
     { 0xE7D2A16EU, 2225000 },
     { 0xE80F67EEU, 277000 },
     { 0xE823FB48U, 10000 },
-    { 0xE8983F9FU, 11305000 },
+    { 0xE8983F9FU, 1130500 },
     { 0xE8A8BA94U, 875000 },
     { 0xE8A8BDA8U, 90000 },
     { 0xE9805550U, 24000 },
     { 0xE99011C2U, 2515000 },
     { 0xEA313705U, 4350000 },
     { 0xEA6A047FU, 835000 },
+    { 0xEA9F9B38U, 1429000 },
     { 0xEB298297U, 75000 },
     { 0xEBC24DF2U, 1600000 },
     { 0xEC3E3404U, 1965000 },
@@ -6411,40 +6453,44 @@ static const Phase3GtacarsPriceEntry kPhase3GtacarsPrices[] =
     { 0xED552C74U, 1955000 },
     { 0xED62BFA9U, 3192000 },
     { 0xED7EADA4U, 30000 },
-    { 0xEDA4ED97U, 11903500 },
+    { 0xEDA4ED97U, 1190350 },
     { 0xEDC6F847U, 1100000 },
     { 0xEDD516C6U, 35000 },
     { 0xEE6024BCU, 795000 },
     { 0xEEA75E63U, 1789000 },
     { 0xEEF345ECU, 1590000 },
-    { 0xEF2295C9U, 251600 },
+    { 0xEF2295C9U, 25160 },
     { 0xEF813606U, 2955000 },
-    { 0xF06C29C7U, 1380000 },
+    { 0xF06C29C7U, 2000000 },
     { 0xF0C2A91FU, 976000 },
     { 0xF1B44F44U, 169000 },
     { 0xF26CEFF9U, 10000 },
+    { 0xF2AE3F81U, 2950000 },
     { 0xF330CB6AU, 790000 },
-    { 0xF34DFB25U, 21213500 },
+    { 0xF34DFB25U, 2121350 },
     { 0xF376F1E6U, 1100000 },
     { 0xF38C4245U, 1225000 },
     { 0xF4E1AA15U, 2000 },
     { 0xF683EACAU, 925000 },
     { 0xF77ADE32U, 275000 },
     { 0xF79A00F7U, 9000 },
+    { 0xF82BC92EU, 947000 },
+    { 0xF8AB457BU, 2845000 },
     { 0xF8C2E0E7U, 345000 },
     { 0xF8D48E7AU, 15000 },
     { 0xF92AEC4DU, 1650000 },
     { 0xF9300CC5U, 15000 },
     { 0xF9E67C05U, 1130000 },
     { 0xFAAD85EEU, 95000 },
-    { 0xFB133A17U, 25935000 },
+    { 0xFB133A17U, 2593500 },
+    { 0xFC2E479AU, 1370000 },
     { 0xFCC2F483U, 597000 },
     { 0xFCFCB68BU, 1790000 },
     { 0xFD128DFDU, 596000 },
     { 0xFD231729U, 62000 },
     { 0xFD707EDEU, 4123000 },
-    { 0xFE0A508CU, 59185000 },
-    { 0xFE141DA6U, 22543500 },
+    { 0xFE0A508CU, 4750000 },
+    { 0xFE141DA6U, 2254350 },
     { 0xFE5F0722U, 1269000 },
     { 0xFEFD644FU, 30000 },
     { 0xFF22D208U, 8000 },
@@ -7376,8 +7422,10 @@ static void UpdateSellCompletionController()
 {
     SellCompletion::Update(
         g_stockLscScopeActive
-        && g_carmodShopActive,
-        g_phase3SellContextActive,
+        && g_carmodShopActive
+        && !g_characterShopRestricted,
+        g_phase3SellContextActive
+        && !g_characterShopRestricted,
         g_phase3SellContextPrice,
         g_phase3SellControlState);
 }
@@ -8058,6 +8106,10 @@ static void RestoreStockLscPatches(
 
     if (restoreFailed)
         return;
+
+    g_characterRestrictionInitialized = false;
+    g_characterRestrictionVehicle = 0;
+    g_characterVehicleRestricted = false;
 
     g_phase3PriceThreadInfo =
         Phase2ThreadInfo{};
@@ -9983,6 +10035,12 @@ static void UpdateNetworkState()
 
 static void BeginCarmodShopSession()
 {
+    UpdateCharacterVehicleSellGate();
+    g_characterShopRestricted = g_characterVehicleRestricted;
+    g_characterHelpUntil = 0;
+    g_characterHelpDisplayed = false;
+    g_characterWorkshopViewSince = 0;
+    g_nextCharacterHelpCheckAt = 0;
     ++g_shopSessionId;
     g_shopSessionStartedAt = GetTickCount64();
     g_nextSnapshotAt = 0;
@@ -10008,8 +10066,6 @@ static void BeginCarmodShopSession()
     g_nextPhase3ThreadLookupAt = 0;
     g_nextPhase2ProgramCheckAt = 0;
 
-    ApplyCharacterVehicleSettingForShop();
-
     Logf(
         "[ShopSession] BEGIN session=%u gameTimer=%d networkGame=%s",
         static_cast<unsigned int>(g_shopSessionId),
@@ -10021,6 +10077,11 @@ static void BeginCarmodShopSession()
 
 static void EndCarmodShopSession()
 {
+    g_characterShopRestricted = false;
+    g_characterHelpUntil = 0;
+    g_characterHelpDisplayed = false;
+    g_characterWorkshopViewSince = 0;
+    g_nextCharacterHelpCheckAt = 0;
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG elapsed =
         now >= g_shopSessionStartedAt
@@ -10034,7 +10095,7 @@ static void EndCarmodShopSession()
         GAMEPLAY::GET_GAME_TIMER());
 
     LogVehicleSnapshot("carmod_shop stopped", true);
-    RestoreCharacterVehicleSettingAfterShop();
+
 
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
@@ -10434,6 +10495,39 @@ void ScriptMain()
                         + kPhase3ControlUpdateIntervalMs;
 
                     UpdatePhase3SellControlStateFast();
+                }
+
+                if (g_characterShopRestricted)
+                {
+                    if (!g_characterHelpDisplayed
+                        && now >= g_nextCharacterHelpCheckAt)
+                    {
+                        g_nextCharacterHelpCheckAt = now + 100ULL;
+
+                        const bool workshopViewReady =
+                            g_phase3PriceThreadCached
+                            && g_phase3CurrentMenuState >= 0
+                            && !CAM::IS_GAMEPLAY_CAM_RENDERING()
+                            && CAM::IS_SCREEN_FADED_IN();
+
+                        if (!workshopViewReady)
+                        {
+                            g_characterWorkshopViewSince = 0;
+                        }
+                        else if (g_characterWorkshopViewSince == 0)
+                        {
+                            g_characterWorkshopViewSince = now;
+                        }
+                        else if (now - g_characterWorkshopViewSince >= 750ULL)
+                        {
+                            g_characterHelpDisplayed = true;
+                            g_characterHelpUntil = now + 2500ULL;
+                            Logf("[Gameplay] CharacterVehicle help shown in workshop view");
+                        }
+                    }
+
+                    if (g_characterHelpUntil > now)
+                        ShowCharacterVehicleSellHelp();
                 }
             }
 
