@@ -7,13 +7,14 @@
 #include <vector>
 #include <share.h>
 
+#include "main.h"
 #include "script.h"
 #include "natives.h"
 #include "SellCompletion.h"
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v1.0.0";
+static const char* kBuildTag = "v1.1.0";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
@@ -22,6 +23,7 @@ static int g_vehicleSellPercent = 60;
 static int g_upgradePercent = 8;
 static bool g_useDamagePenalty = true;
 static bool g_allowCharacterVehicles = false;
+static bool g_postSaleCooldownNoticePending = false;
 
 static bool g_logEnabled = true;
 static bool g_debugLoggingEnabled = false;
@@ -91,8 +93,8 @@ static bool g_prepareStructuralCacheOnly = false;
 static bool g_structuralCacheReady = false;
 static bool g_startupStructuralInitializationComplete = false;
 static bool g_startupCarmodProgramPinned = false;
-static constexpr ULONGLONG kStockLscScopePollOutsideMs = 250ULL;
-static constexpr ULONGLONG kStockLscScopePollInsideMs = 100ULL;
+static constexpr ULONGLONG kStockLscScopePollOutsideMs = 500ULL;
+static constexpr ULONGLONG kStockLscScopePollInsideMs = 250ULL;
 static constexpr ULONGLONG kPhase3ControlUpdateIntervalMs = 16ULL;
 
 struct StockLscPoint
@@ -404,9 +406,38 @@ static void Logf(const char* format, ...)
 
 static void LogSellCompletionMessage(const char* message)
 {
+    if (g_useSellCooldown
+        && message
+        && std::strncmp(message, "payout deposited ", 17) == 0)
+    {
+        g_postSaleCooldownNoticePending = true;
+    }
+
     Logf(
         "[SellCompletion] %s",
         message ? message : "<null>");
+}
+
+static void ShowPostSaleCooldownNotice()
+{
+    if (!g_postSaleCooldownNoticePending)
+        return;
+
+    g_postSaleCooldownNoticePending = false;
+
+    if (!g_useSellCooldown || g_lastNetworkGame)
+        return;
+
+    const std::string message =
+        "You have to wait "
+        + std::to_string(g_sellCooldownMinutes)
+        + (g_sellCooldownMinutes == 1 ? " minute" : " minutes")
+        + " before you can sell another vehicle.";
+
+    UI::_SET_TEXT_COMPONENT_FORMAT("STRING");
+    UI::_ADD_TEXT_COMPONENT_STRING(
+        const_cast<char*>(message.c_str()));
+    UI::_DISPLAY_HELP_TEXT_FROM_STRING_LABEL(0, false, true, 5000);
 }
 
 static void Notify(const std::string& text)
@@ -917,10 +948,7 @@ static Vehicle g_characterRestrictionVehicle = 0;
 static bool g_characterRestrictionInitialized = false;
 static bool g_characterVehicleRestricted = false;
 static bool g_characterShopRestricted = false;
-static ULONGLONG g_characterHelpUntil = 0;
-static bool g_characterHelpDisplayed = false;
-static ULONGLONG g_characterWorkshopViewSince = 0;
-static ULONGLONG g_nextCharacterHelpCheckAt = 0;
+static bool g_characterSellMessageShown = false;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
@@ -2185,7 +2213,7 @@ static bool ShouldExposeSellForCurrentVehicle()
         : 0;
 
     if (!vehicle && g_carmodShopActive && g_characterRestrictionInitialized)
-        return !g_characterVehicleRestricted;
+        return true;
 
     if (!g_characterRestrictionInitialized
         || g_characterRestrictionVehicle != vehicle)
@@ -2194,13 +2222,14 @@ static bool ShouldExposeSellForCurrentVehicle()
         g_characterRestrictionInitialized = true;
         g_characterVehicleRestricted = !g_allowCharacterVehicles
             && IsRockstarCharacterVehicle(vehicle);
+        g_characterSellMessageShown = false;
 
         Logf("[Gameplay] CharacterVehicle restriction model=%08X blocked=%s",
             vehicle ? static_cast<unsigned int>(ENTITY::GET_ENTITY_MODEL(vehicle)) : 0U,
             g_characterVehicleRestricted ? "yes" : "no");
     }
 
-    return !g_characterVehicleRestricted;
+    return true;
 }
 
 static void UpdateCharacterVehicleSellGate()
@@ -2215,17 +2244,13 @@ static void UpdateCharacterVehicleSellGateForApproach(Vehicle vehicle)
 {
     if (g_phase2PatchApplied
         && (vehicle != g_characterRestrictionVehicle
-            || g_phase2VisibilityBypassActive == g_characterVehicleRestricted))
+            || !g_phase2VisibilityBypassActive))
     {
         UpdateCharacterVehicleSellGate();
 
         if (g_carmodShopActive)
         {
             g_characterShopRestricted = g_characterVehicleRestricted;
-            g_characterHelpUntil = 0;
-            g_characterHelpDisplayed = false;
-            g_characterWorkshopViewSince = 0;
-            g_nextCharacterHelpCheckAt = 0;
         }
     }
 }
@@ -2233,23 +2258,6 @@ static void UpdateCharacterVehicleSellGateForApproach(Vehicle vehicle)
 static void ApplyCharacterVehicleSettingForShop()
 {
     UpdateCharacterVehicleSellGate();
-}
-
-static void ShowCharacterVehicleSellHelp()
-{
-    static const char message[] = "You cannot sell this vehicle.";
-    nativeInit(0x8509B634FBE7DA11ULL);
-    nativePush64(reinterpret_cast<uint64_t>("STRING"));
-    nativeCall();
-    nativeInit(0x6C188BE134E074AAULL);
-    nativePush64(reinterpret_cast<uint64_t>(message));
-    nativeCall();
-    nativeInit(0x238FFE5C7B0498A6ULL);
-    nativePush64(0ULL);
-    nativePush64(0ULL);
-    nativePush64(0ULL);
-    nativePush64(static_cast<uint64_t>(-1LL));
-    nativeCall();
 }
 
 static void UpdatePhase2SellExposure()
@@ -7030,7 +7038,6 @@ static void FlushPhase3DisplayPriceEvent()
         static_cast<unsigned int>(
             g_phase3SellPricePath.registerNativeIndex));
 
-    FlushLogBuffer();
 }
 
 static void UpdatePhase3SellPriceFallback()
@@ -7369,6 +7376,7 @@ static void UpdatePhase3SellControlStateFast()
 
     if (!g_phase3SellStageActive)
     {
+        g_characterSellMessageShown = false;
         g_phase3SellControlState = -1;
 
         if (g_phase3LastLoggedSellControlState != -1)
@@ -7753,7 +7761,12 @@ static void Phase3SellCooldownClockHook(
     int clockValue = 2147483647;
     int remainingSeconds = 0;
 
-    if (g_useSellCooldown)
+    if (g_characterShopRestricted)
+    {
+        clockValue = 0;
+        remainingSeconds = 2880;
+    }
+    else if (g_useSellCooldown)
     {
         int activeClockValue = 0;
         int activeRemainingSeconds = 0;
@@ -7780,12 +7793,15 @@ static void Phase3SellCooldownClockHook(
         &rawValue,
         sizeof(rawValue));
 
-    g_phase3CooldownGateClockValue =
-        clockValue;
-    g_phase3CooldownGateRemainingSeconds =
-        remainingSeconds;
-    g_phase3CooldownGateEventPending =
-        true;
+    if (clockValue != g_phase3CooldownGateClockValue
+        || remainingSeconds != g_phase3CooldownGateRemainingSeconds
+        || (g_characterShopRestricted && !g_characterSellMessageShown))
+    {
+        g_phase3CooldownGateEventPending = true;
+    }
+
+    g_phase3CooldownGateClockValue = clockValue;
+    g_phase3CooldownGateRemainingSeconds = remainingSeconds;
 }
 
 static bool InstallPhase3SellCooldownHook(
@@ -7880,6 +7896,24 @@ static bool InstallPhase3SellCooldownHook(
     return true;
 }
 
+static void ShowCharacterVehicleSellMessage(bool repeatAttempt = false)
+{
+    if (!g_characterShopRestricted
+        || !g_phase3SellStageActive
+        || g_lastNetworkGame
+        || (g_characterSellMessageShown && !repeatAttempt))
+    {
+        return;
+    }
+
+    UI::_SET_TEXT_ENTRY_2("STRING");
+    UI::_ADD_TEXT_COMPONENT_STRING(
+        const_cast<char*>("You cannot sell this vehicle"));
+    UI::_DRAW_SUBTITLE_TIMED(3000, true);
+
+    g_characterSellMessageShown = true;
+}
+
 static void FlushPhase3SellCooldownGateEvent()
 {
     if (!g_phase3CooldownGateEventPending)
@@ -7888,13 +7922,16 @@ static void FlushPhase3SellCooldownGateEvent()
     g_phase3CooldownGateEventPending =
         false;
 
+    ShowCharacterVehicleSellMessage();
+
     const int remaining =
         g_phase3CooldownGateRemainingSeconds;
 
     const bool shouldLog =
         g_phase3CooldownLastLoggedRemainingSeconds
         < 0
-        || remaining == 0
+        || (remaining == 0
+            && g_phase3CooldownLastLoggedRemainingSeconds != 0)
         || remaining
         <= g_phase3CooldownLastLoggedRemainingSeconds
         - 30;
@@ -9866,6 +9903,22 @@ static bool WasFrontendControlJustPressed(int control)
         || CONTROLS::IS_DISABLED_CONTROL_JUST_PRESSED(2, control);
 }
 
+static void UpdateCharacterVehicleSellMessageOnInput()
+{
+    if (!g_characterShopRestricted
+        || !g_phase3SellStageActive
+        || g_lastNetworkGame)
+    {
+        return;
+    }
+
+    if (WasFrontendControlJustPressed(201)
+        || WasFrontendControlJustPressed(237))
+    {
+        ShowCharacterVehicleSellMessage(true);
+    }
+}
+
 static bool LogControlIfPressed(
     int control,
     const char* name)
@@ -10035,12 +10088,9 @@ static void UpdateNetworkState()
 
 static void BeginCarmodShopSession()
 {
+    g_characterSellMessageShown = false;
     UpdateCharacterVehicleSellGate();
     g_characterShopRestricted = g_characterVehicleRestricted;
-    g_characterHelpUntil = 0;
-    g_characterHelpDisplayed = false;
-    g_characterWorkshopViewSince = 0;
-    g_nextCharacterHelpCheckAt = 0;
     ++g_shopSessionId;
     g_shopSessionStartedAt = GetTickCount64();
     g_nextSnapshotAt = 0;
@@ -10077,11 +10127,8 @@ static void BeginCarmodShopSession()
 
 static void EndCarmodShopSession()
 {
+    g_characterSellMessageShown = false;
     g_characterShopRestricted = false;
-    g_characterHelpUntil = 0;
-    g_characterHelpDisplayed = false;
-    g_characterWorkshopViewSince = 0;
-    g_nextCharacterHelpCheckAt = 0;
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG elapsed =
         now >= g_shopSessionStartedAt
@@ -10419,6 +10466,7 @@ void ScriptMain()
         return;
     }
 
+    g_postSaleCooldownNoticePending = false;
     SellCompletion::Initialize(
         &LogSellCompletionMessage);
     SellCompletion::ConfigureCooldown(
@@ -10497,38 +10545,7 @@ void ScriptMain()
                     UpdatePhase3SellControlStateFast();
                 }
 
-                if (g_characterShopRestricted)
-                {
-                    if (!g_characterHelpDisplayed
-                        && now >= g_nextCharacterHelpCheckAt)
-                    {
-                        g_nextCharacterHelpCheckAt = now + 100ULL;
-
-                        const bool workshopViewReady =
-                            g_phase3PriceThreadCached
-                            && g_phase3CurrentMenuState >= 0
-                            && !CAM::IS_GAMEPLAY_CAM_RENDERING()
-                            && CAM::IS_SCREEN_FADED_IN();
-
-                        if (!workshopViewReady)
-                        {
-                            g_characterWorkshopViewSince = 0;
-                        }
-                        else if (g_characterWorkshopViewSince == 0)
-                        {
-                            g_characterWorkshopViewSince = now;
-                        }
-                        else if (now - g_characterWorkshopViewSince >= 750ULL)
-                        {
-                            g_characterHelpDisplayed = true;
-                            g_characterHelpUntil = now + 2500ULL;
-                            Logf("[Gameplay] CharacterVehicle help shown in workshop view");
-                        }
-                    }
-
-                    if (g_characterHelpUntil > now)
-                        ShowCharacterVehicleSellHelp();
-                }
+                UpdateCharacterVehicleSellMessageOnInput();
             }
 
             if (g_debugLogActive)
@@ -10548,6 +10565,7 @@ void ScriptMain()
         }
 
         UpdateSellCompletionController();
+        ShowPostSaleCooldownNotice();
 
         if (g_stockLscScopeActive)
             FlushPhase3SellCooldownGateEvent();
