@@ -40,6 +40,7 @@ static size_t g_logBufferUsed = 0;
 static uint32_t g_logDroppedLines = 0;
 static ULONGLONG g_nextLogFlushAt = 0;
 static bool g_debugLogActive = false;
+static bool g_startupLogging = true;
 
 static bool g_phase2Enabled = true;
 static bool g_phase3Enabled = true;
@@ -221,72 +222,9 @@ static void WriteStatusLogLine(
     std::fclose(file);
 }
 
-static bool ContainsInsensitive(
-    const char* text,
-    const char* needle)
-{
-    if (!text || !needle || !*needle)
-        return false;
-
-    const size_t needleLength =
-        std::strlen(needle);
-
-    for (const char* p = text; *p; ++p)
-    {
-        if (_strnicmp(
-            p,
-            needle,
-            needleLength) == 0)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool IsFailureDiagnostic(
-    const char* message)
-{
-    if (!message)
-        return false;
-
-    static const char* const failureMarkers[] =
-    {
-        "failed",
-        "failure",
-        "error=",
-        "error:",
-        "=no reason=",
-        "unresolved",
-        "could not",
-        "not armed",
-        "unsupported executable",
-        "invalid code",
-        "invalid program",
-        "write/verify"
-    };
-
-    for (size_t i = 0;
-        i < sizeof(failureMarkers)
-        / sizeof(failureMarkers[0]);
-        ++i)
-    {
-        if (ContainsInsensitive(
-            message,
-            failureMarkers[i]))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static void FlushLogBuffer()
 {
     if (!g_logEnabled
-        || !g_debugLogActive
         || (g_logBufferUsed == 0
             && g_logDroppedLines == 0))
     {
@@ -325,7 +263,8 @@ static void FlushLogBuffer()
 
 static void Logf(const char* format, ...)
 {
-    if (!g_logEnabled || !format)
+    if (!g_logEnabled || !format
+        || (!g_startupLogging && !g_debugLogActive))
         return;
 
     char message[1792]{};
@@ -372,19 +311,19 @@ static void Logf(const char* format, ...)
         return;
     }
 
-    if (!g_debugLogActive
-        && g_logBufferUsed
-            > kLogBufferCapacity - lineLength)
-    {
-        g_logBufferUsed = 0;
-        ++g_logDroppedLines;
-    }
-
     if (g_logBufferUsed
         > kLogBufferCapacity - lineLength)
     {
-        ++g_logDroppedLines;
-        return;
+        if (!g_debugLogActive)
+        {
+            g_logBufferUsed = 0;
+            ++g_logDroppedLines;
+        }
+        else
+        {
+            ++g_logDroppedLines;
+            return;
+        }
     }
 
     std::memcpy(
@@ -393,15 +332,6 @@ static void Logf(const char* format, ...)
         lineLength);
 
     g_logBufferUsed += lineLength;
-
-    if (!g_debugLogActive
-        && IsFailureDiagnostic(message))
-    {
-        g_debugLogActive = true;
-        WriteStatusLogLine(
-            "SellVehiclesAtLSC failure detected - debug logging enabled");
-        FlushLogBuffer();
-    }
 }
 
 static void LogSellCompletionMessage(const char* message)
@@ -600,39 +530,52 @@ static void UpdateStockLscScope(
 static const char* GetExecutableName()
 {
     static char executableName[MAX_PATH]{};
+    static const bool initialized = []() -> bool
+    {
+        char fullPath[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameA(
+            GetModuleHandleA(nullptr),
+            fullPath,
+            MAX_PATH);
 
-    char fullPath[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameA(
-        GetModuleHandleA(nullptr),
-        fullPath,
-        MAX_PATH);
+        if (length == 0 || length >= MAX_PATH)
+        {
+            strcpy_s(executableName, "<unknown>");
+            return true;
+        }
 
-    if (length == 0 || length >= MAX_PATH)
-        return "<unknown>";
+        const char* slash = std::strrchr(fullPath, '\\');
+        const char* name = slash ? slash + 1 : fullPath;
 
-    const char* slash = std::strrchr(fullPath, '\\');
-    const char* name = slash ? slash + 1 : fullPath;
+        strncpy_s(
+            executableName,
+            sizeof(executableName),
+            name,
+            _TRUNCATE);
 
-    strncpy_s(
-        executableName,
-        sizeof(executableName),
-        name,
-        _TRUNCATE);
+        return true;
+    }();
 
+    (void)initialized;
     return executableName;
 }
 
 static const char* GetEditionName()
 {
-    const char* executableName = GetExecutableName();
+    static const char* edition = []() -> const char*
+    {
+        const char* executableName = GetExecutableName();
 
-    if (_stricmp(executableName, "GTA5_Enhanced.exe") == 0)
-        return "Enhanced";
+        if (_stricmp(executableName, "GTA5_Enhanced.exe") == 0)
+            return "Enhanced";
 
-    if (_stricmp(executableName, "GTA5.exe") == 0)
-        return "Legacy";
+        if (_stricmp(executableName, "GTA5.exe") == 0)
+            return "Legacy";
 
-    return "Unknown";
+        return "Unknown";
+    }();
+
+    return edition;
 }
 
 struct Phase2ScrProgram
@@ -935,6 +878,7 @@ static Vehicle g_phase3FallbackVehicle = 0;
 static Hash g_phase3FallbackModel = 0;
 static int g_phase3FallbackPrice = 0;
 static bool g_phase3FallbackLogged = false;
+static ULONGLONG g_nextPhase3FallbackEstimateAt = 0;
 static bool g_phase3SellContextActive = false;
 static int g_phase3SellContextPrice = 0;
 static Phase3SellControlPath g_phase3SellControlPath{};
@@ -952,7 +896,9 @@ static bool g_characterSellMessageShown = false;
 static Phase2ThreadInfo g_phase3PriceThreadInfo{};
 static bool g_phase3PriceThreadCached = false;
 static ULONGLONG g_nextPhase3PriceUpdateAt = 0;
+static ULONGLONG g_nextPhase3PreparedPriceCheckAt = 0;
 static constexpr ULONGLONG kPhase3PriceUpdateIntervalMs = 50ULL;
+static constexpr ULONGLONG kPhase3PreparedPriceCheckIntervalMs = 500ULL;
 
 static void ResetPhase3PreparedSellPrice();
 static bool IsPhase3PcAtNativeSite(
@@ -961,12 +907,16 @@ static bool IsPhase3PcAtNativeSite(
 
 static bool IsEnhancedEdition()
 {
-    return _stricmp(GetEditionName(), "Enhanced") == 0;
+    static const bool enhanced =
+        _stricmp(GetEditionName(), "Enhanced") == 0;
+    return enhanced;
 }
 
 static bool IsLegacyEdition()
 {
-    return _stricmp(GetEditionName(), "Legacy") == 0;
+    static const bool legacy =
+        _stricmp(GetEditionName(), "Legacy") == 0;
+    return legacy;
 }
 
 static bool IsReadableMemory(const void* address, size_t size)
@@ -1335,17 +1285,23 @@ static bool GetPhase2ThreadInfo(
     for (uint16_t i = 0; i < count; ++i)
     {
         void* thread = data[i];
-        uint32_t threadId = 0;
-        uint32_t threadHash = 0;
-
         if (!thread
-            || !ReadMemoryValue(thread, 0x08, threadId)
-            || threadId == 0
-            || !ReadMemoryValue(thread, hashOffset, threadHash)
-            || threadHash != scriptHash)
+            || !IsReadableMemory(
+                thread,
+                hashOffset + sizeof(uint32_t)))
         {
             continue;
         }
+
+        const unsigned char* threadBytes =
+            reinterpret_cast<const unsigned char*>(thread);
+        uint32_t threadId = 0;
+        uint32_t threadHash = 0;
+        std::memcpy(&threadId, threadBytes + 0x08, sizeof(threadId));
+        std::memcpy(&threadHash, threadBytes + hashOffset, sizeof(threadHash));
+
+        if (threadId == 0 || threadHash != scriptHash)
+            continue;
 
         if (IsLegacyEdition())
         {
@@ -2296,29 +2252,8 @@ static void UpdatePhase2SellExposure()
         return;
     }
 
-    LARGE_INTEGER activationStart{};
-    LARGE_INTEGER activationEnd{};
-    LARGE_INTEGER timerFrequency{};
-    QueryPerformanceCounter(&activationStart);
-
     const bool activated =
         ReactivateCachedStockLscPatches(program);
-
-    QueryPerformanceCounter(&activationEnd);
-    QueryPerformanceFrequency(&timerFrequency);
-
-    if (timerFrequency.QuadPart > 0)
-    {
-        const unsigned long long elapsedMicroseconds =
-            static_cast<unsigned long long>(
-                (activationEnd.QuadPart - activationStart.QuadPart)
-                * 1000000LL / timerFrequency.QuadPart);
-
-        Logf(
-            "[Runtime] LSC VM activation durationUs=%llu success=%s",
-            elapsedMicroseconds,
-            activated ? "yes" : "no");
-    }
 
     if (activated)
         return;
@@ -6957,6 +6892,7 @@ static void ResetPhase3PreparedSellPrice()
     g_phase3PreparedMenuState = -999;
     g_phase3PreparedSellPrice = 0;
     g_phase3PreparedSellPriceValid = false;
+    g_nextPhase3PreparedPriceCheckAt = 0;
 }
 
 static void UpdatePhase3PreparedSellPrice()
@@ -6966,6 +6902,16 @@ static void UpdatePhase3PreparedSellPrice()
     {
         return;
     }
+
+    const ULONGLONG now = GetTickCount64();
+    if (g_phase3CurrentMenuState == g_phase3PreparedMenuState
+        && now < g_nextPhase3PreparedPriceCheckAt)
+    {
+        return;
+    }
+
+    g_nextPhase3PreparedPriceCheckAt =
+        now + kPhase3PreparedPriceCheckIntervalMs;
 
     const Ped playerPed =
         PLAYER::PLAYER_PED_ID();
@@ -7008,7 +6954,11 @@ static void UpdatePhase3PreparedSellPrice()
         model,
         estimate))
     {
-        ResetPhase3PreparedSellPrice();
+        g_phase3PreparedVehicle = vehicle;
+        g_phase3PreparedModel = model;
+        g_phase3PreparedMenuState = g_phase3CurrentMenuState;
+        g_phase3PreparedSellPrice = 0;
+        g_phase3PreparedSellPriceValid = false;
         return;
     }
 
@@ -7164,10 +7114,24 @@ static void UpdatePhase3SellPriceFallback()
         g_phase3FallbackModel = model;
         g_phase3FallbackPrice = 0;
         g_phase3FallbackLogged = false;
+        g_nextPhase3FallbackEstimateAt = 0;
     }
 
     if (g_phase3FallbackPrice <= 0)
     {
+        if (now < g_nextPhase3FallbackEstimateAt)
+        {
+            if (rockstarPrice > 0)
+            {
+                g_phase3SellContextActive = true;
+                g_phase3SellContextPrice = rockstarPrice;
+            }
+            return;
+        }
+
+        g_nextPhase3FallbackEstimateAt =
+            now + kPhase3PreparedPriceCheckIntervalMs;
+
         Phase3VehiclePriceEstimate estimate{};
 
         if (!EstimatePhase3VehicleSellPrice(
@@ -7365,7 +7329,9 @@ static void UpdatePhase3SellControlStateFast()
                 g_phase3FallbackModel = 0;
                 g_phase3FallbackPrice = 0;
                 g_phase3FallbackLogged = false;
+                g_nextPhase3FallbackEstimateAt = 0;
                 g_phase3PreparedMenuState = -999;
+                g_nextPhase3PreparedPriceCheckAt = 0;
             }
 
         }
@@ -7710,6 +7676,33 @@ static bool InstallPhase3SellDisplayPriceHook(
     return true;
 }
 
+static bool ReadPhase3HookProgramCounter(
+    const void* thread,
+    uint32_t& programCounter)
+{
+    if (!thread)
+        return false;
+
+    const size_t pcOffset =
+        IsEnhancedEdition() ? 0x1C : 0x14;
+    const unsigned char* address =
+        reinterpret_cast<const unsigned char*>(thread) + pcOffset;
+
+#if defined(_MSC_VER)
+    __try
+    {
+        std::memcpy(&programCounter, address, sizeof(programCounter));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+    return true;
+#else
+    return ReadMemoryValue(thread, pcOffset, programCounter);
+#endif
+}
+
 static void Phase3SellCooldownClockHook(
     Phase3NativeCallContext* context)
 {
@@ -7739,21 +7732,12 @@ static void Phase3SellCooldownClockHook(
     }
 
     uint32_t programCounter = 0;
-    const size_t pcOffset =
-        IsEnhancedEdition()
-        ? 0x1C
-        : 0x14;
-
-    if (!ReadMemoryValue(
+    if (!ReadPhase3HookProgramCounter(
         g_phase3PriceThreadInfo.thread,
-        pcOffset,
         programCounter)
         || !IsPhase3PcAtNativeSite(
             programCounter,
-            g_phase3SellCooldownHook.nativeSite)
-        || !IsReadableMemory(
-            context->returnValue,
-            sizeof(uint64_t)))
+            g_phase3SellCooldownHook.nativeSite))
     {
         return;
     }
@@ -9854,7 +9838,7 @@ static void LogVehicleSnapshot(
     const char* reason,
     bool force)
 {
-    if (!g_logVehicleSnapshots)
+    if (!g_debugLogActive || !g_logVehicleSnapshots)
         return;
 
     const VehicleSnapshot snapshot =
@@ -10103,6 +10087,7 @@ static void BeginCarmodShopSession()
     g_phase3FallbackModel = 0;
     g_phase3FallbackPrice = 0;
     g_phase3FallbackLogged = false;
+    g_nextPhase3FallbackEstimateAt = 0;
     g_phase3SellContextActive = false;
     g_phase3SellContextPrice = 0;
     g_phase3SellControlState = -1;
@@ -10491,7 +10476,10 @@ void ScriptMain()
             "[Init] SellVehiclesAtLSC startup initialization failed; runtime structural discovery is disabled");
         WriteStatusLogLine(
             "SellVehiclesAtLSC Initialization Failed");
+        FlushLogBuffer();
     }
+
+    g_startupLogging = false;
 
     if (g_showStartupNotification)
     {
