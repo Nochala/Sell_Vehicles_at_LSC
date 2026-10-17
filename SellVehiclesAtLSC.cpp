@@ -14,7 +14,7 @@
 
 static const char* g_iniPath = ".\\SellVehiclesAtLSC.ini";
 static const char* g_logPath = "SellVehiclesAtLSC.log";
-static const char* kBuildTag = "v1.1.0";
+static const char* kBuildTag = "v1.1.1";
 
 static bool g_enabled = true;
 static bool g_useSellCooldown = false;
